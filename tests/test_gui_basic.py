@@ -15,10 +15,20 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QPoint, QSize
 from PySide6.QtGui import QColor, QKeySequence
-from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLabel, QTabBar, QToolBar
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialogButtonBox,
+    QLabel,
+    QMenu,
+    QSpinBox,
+    QTabBar,
+    QToolBar,
+    QToolButton,
+)
 
 from mdview.core.palette import PaletteRegistry
 from mdview.core.paths import AppDir, app_dir
+from mdview.core.tabs import Tab
 from mdview.viewer.application import AppContext, bootstrap
 from mdview.viewer.main_window import MainWindow, page_id_for
 from mdview.viewer.palette_editor import PaletteEditor
@@ -65,12 +75,25 @@ class TestTabs:
         assert html is not None
         assert "Demo Document" in html
 
-    def test_unsupported_file_only_warns(self, ctx: AppContext, tmp_path: Path) -> None:
-        bogus = tmp_path / "data.txt"
-        bogus.write_text("x", encoding="utf-8")
-        ctx.window.open_paths([bogus])
-        assert ctx.window.tab_count() == 0
-        assert "not a Markdown file" in ctx.window.statusBar().currentMessage()
+    def test_text_file_of_other_suffix_opens_as_markdown(
+        self, ctx: AppContext, tmp_path: Path
+    ) -> None:
+        """Phase 6 policy: a readable text file opens whatever its suffix.
+
+        Refusing ``.txt`` was the old behaviour ("not a Markdown file"); the
+        friendlier decision (DESIGN.md "Open-file policy") is to render it.
+        """
+        text = tmp_path / "data.txt"
+        text.write_text("# Plain wins\n", encoding="utf-8")
+        problems = ctx.window.open_paths([text])
+        assert problems == []
+        assert ctx.window.tab_count() == 1
+        tab = ctx.window.current_tab()
+        assert tab is not None
+        assert tab.error is None
+        html = PageStore.get(page_id_for(tab.tab_id))
+        assert html is not None
+        assert "Plain wins" in html
 
     def test_external_edit_rerenders(self, ctx: AppContext, demo_file: Path) -> None:
         window = ctx.window
@@ -84,6 +107,140 @@ class TestTabs:
         html = PageStore.get(page_id_for(tab.tab_id))
         assert html is not None
         assert "MARKER-XYZ" in html
+
+
+class TestNativeMenus:
+    """Phase 6 defect 1: the menu bar must carry Window and Help menus.
+
+    Qt6 exposes no public WindowRole/HelpRole -- QCocoaMenuBar slots the
+    menus natively by *title* ("Window"/"Help", localized).  The Qt-side
+    contract testable on every platform: the menus exist, carry exactly the
+    titles Cocoa detects, and hold the conventional actions.  Where the
+    native menu bar takes over (real macOS: window list, Spotlight search)
+    is verified on a Mac only.
+    """
+
+    def _menu(self, window: MainWindow, object_name: str) -> QMenu:
+        for action in window.menuBar().actions():
+            menu = action.menu()
+            if menu is not None and menu.objectName() == object_name:
+                return menu
+        raise AssertionError(f"no menu with objectName {object_name!r}")
+
+    def test_window_and_help_menus_carry_cocoa_titles(self, ctx: AppContext) -> None:
+        # The titles are load-bearing: they are what Cocoa detects and slots.
+        assert self._menu(ctx.window, "windowMenu").title() == "&Window"
+        assert self._menu(ctx.window, "helpMenu").title() == "&Help"
+
+    def test_window_menu_carries_standard_actions(self, ctx: AppContext) -> None:
+        menu = self._menu(ctx.window, "windowMenu")
+        texts = {
+            action.text().replace("&", "") for action in menu.actions() if not action.isSeparator()
+        }
+        assert {"Minimize", "Zoom", "Bring All to Front"} <= texts
+
+    def test_help_menu_offers_the_help_action(self, ctx: AppContext) -> None:
+        menu = self._menu(ctx.window, "helpMenu")
+        texts = [action.text().replace("&", "") for action in menu.actions()]
+        assert any("Help" in text for text in texts)
+
+
+class TestOpenFailures:
+    """Phase 6 defect 3: a failed open must be *visible*, never silent.
+
+    Each unopenable path gets a themed error tab naming the path and the
+    reason; good paths in the same batch are unaffected; re-opening once the
+    file exists upgrades the tab in place.
+    """
+
+    def _page_html(self, tab: Tab) -> str:
+        html = PageStore.get(page_id_for(tab.tab_id))
+        assert html is not None
+        return html
+
+    def test_missing_file_gets_an_error_tab(self, ctx: AppContext, tmp_path: Path) -> None:
+        window = ctx.window
+        missing = tmp_path / "kitchen-sink.md"
+        problems = window.open_paths([missing])
+        assert problems
+        assert "file not found" in problems[0]
+        assert window.tab_count() == 1
+        tab = window.current_tab()
+        assert tab is not None
+        assert tab.error is not None
+        assert tab.title.startswith("⚠")
+        html = self._page_html(tab)
+        assert "kitchen-sink.md" in html
+        assert "file not found" in html
+        assert "Can’t open" in html  # noqa: RUF001
+
+    def test_mixed_batch_opens_the_good_tabs_too(
+        self, ctx: AppContext, demo_file: Path, tmp_path: Path
+    ) -> None:
+        window = ctx.window
+        problems = window.open_paths([demo_file, tmp_path / "gone.md"])
+        assert len(problems) == 1
+        assert window.tab_count() == 2  # the failure did not block the success
+        tabs = window._model.tabs
+        good = [tab for tab in tabs if tab.error is None]
+        bad = [tab for tab in tabs if tab.error is not None]
+        assert (len(good), len(bad)) == (1, 1)
+        assert "Demo Document" in self._page_html(good[0])
+        assert "file not found" in self._page_html(bad[0])
+
+    def test_directory_gets_an_error_tab(self, ctx: AppContext, tmp_path: Path) -> None:
+        window = ctx.window
+        problems = window.open_paths([tmp_path])
+        assert problems
+        assert "directory" in problems[0]
+        tab = window.current_tab()
+        assert tab is not None
+        assert tab.error is not None
+        assert "directory" in self._page_html(tab)
+
+    def test_binary_file_gets_an_error_tab(self, ctx: AppContext, tmp_path: Path) -> None:
+        blob = tmp_path / "blob.md"
+        blob.write_bytes(b"# fake\n\x00\x01\x02binary")
+        window = ctx.window
+        problems = window.open_paths([blob])
+        assert problems
+        assert "not a text file" in problems[0]
+        tab = window.current_tab()
+        assert tab is not None
+        assert tab.error is not None
+        assert "not a text file" in self._page_html(tab)
+
+    def test_error_tab_upgrades_when_the_file_appears(
+        self, ctx: AppContext, tmp_path: Path
+    ) -> None:
+        window = ctx.window
+        path = tmp_path / "late.md"
+        window.open_paths([path])
+        errored = window.current_tab()
+        assert errored is not None
+        assert errored.error is not None
+        tab_id = errored.tab_id
+        path.write_text("# Finally here\n", encoding="utf-8")
+        problems = window.open_paths([path])
+        assert problems == []
+        tab = window.current_tab()
+        assert tab is not None
+        assert tab.tab_id == tab_id
+        assert tab.error is None
+        assert not tab.title.startswith("⚠")
+        html = self._page_html(tab)
+        assert "Finally here" in html
+        assert "Can’t open" not in html  # noqa: RUF001
+
+    def test_startup_restore_skips_vanished_files_quietly(
+        self, ctx: AppContext, demo_file: Path, tmp_path: Path
+    ) -> None:
+        """A stale session is not a failed open request: no error-tab spam."""
+        window = ctx.window
+        gone = tmp_path / "gone.md"
+        problems = window.open_paths([demo_file, gone], quiet_missing=True)
+        assert problems == []
+        assert window.tab_count() == 1
 
 
 class TestAppearanceAndPalettes:
@@ -340,3 +497,36 @@ class TestWindowLayout:
             assert view is not None
             view_bottom = view.mapTo(window, QPoint(0, view.height() - 1)).y()
             assert view_bottom < toolbar_top
+
+    def test_zoom_bar_controls_never_clip_at_narrow_width(
+        self, ctx: AppContext, demo_file: Path, qtbot: pytest.FixtureRequest
+    ) -> None:
+        """Phase 6 defect 2: the zoom pill clipped its label ("oom Out") at the edge."""
+        window = ctx.window
+        window.resize(640, 480)  # deliberately narrow: nothing may squeeze out
+        window.show()
+        qtbot.waitExposed(window)  # type: ignore[attr-defined]
+        window.open_paths([demo_file])
+
+        out = window.findChild(QToolButton, "zoomOutButton")
+        zoom_in = window.findChild(QToolButton, "zoomInButton")
+        spin = window.findChild(QSpinBox, "fontSizeSpin")
+        toolbar = window.findChild(QToolBar, "zoomToolbar")
+        assert out is not None
+        assert zoom_in is not None
+        assert spin is not None
+        assert toolbar is not None
+        assert toolbar.height() > 0
+
+        out_x = out.mapTo(window, QPoint(0, 0)).x()
+        assert out_x >= 8, f"zoom-out button hugs the window edge (x={out_x})"
+        right = zoom_in.mapTo(window, QPoint(zoom_in.width(), 0)).x()
+        assert right <= window.width(), "zoom bar overruns the window's right edge"
+
+        # Labels are elide-safe: the layout gave every button at least its
+        # full text width, so no glyph can be clipped at this width.
+        for button, label in ((out, "Zoom Out"), (zoom_in, "Zoom In")):
+            fm = button.fontMetrics()
+            assert button.width() >= fm.horizontalAdvance(label)
+            assert button.isVisible()
+        assert spin.width() >= spin.minimumWidth()

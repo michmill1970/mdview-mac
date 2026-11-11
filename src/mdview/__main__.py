@@ -105,14 +105,18 @@ def cmd_fetch_assets(args: argparse.Namespace) -> int:
 
 
 def cmd_render(args: argparse.Namespace) -> int:
-    from mdview.core.document import Document, is_supported
+    from mdview.core.document import Document, inspect_openable
     from mdview.core.errors import AssetError
     from mdview.render.page import PageOptions, render_page
 
+    # Same policy as the GUI: any readable text file renders as Markdown;
+    # directories and binaries are usage errors, missing files a plain error.
+    reason = inspect_openable(args.path)
+    if reason is not None:
+        print(f"mdview: {reason}", file=sys.stderr)
+        return EXIT_ERROR if reason.startswith("file not found:") else EXIT_USAGE
+
     document = Document.open(args.path)
-    if not is_supported(document.path):
-        print(f"mdview: not a Markdown file: {document.path}", file=sys.stderr)
-        return EXIT_USAGE
 
     registry = _registry()
     settings = _settings()
@@ -145,10 +149,31 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def preflight_open(paths: list[Path]) -> list[str]:
+    """Reasons why any of ``paths`` cannot be opened (empty = all fine).
+
+    The GUI will show an error tab for these, so the app still opens the
+    good files; the CLI additionally turns a non-empty result into a
+    non-zero exit code, which is what scripts checking ``mdview open`` need.
+    """
+    from mdview.core.document import inspect_openable
+
+    reasons = []
+    for path in paths:
+        reason = inspect_openable(path)
+        if reason is not None:
+            reasons.append(reason)
+    return reasons
+
+
 def cmd_open_gui(paths: list[Path]) -> int:
     from mdview.viewer.application import run
 
-    return run(list(sys.argv[:1]), paths=paths)
+    failures = preflight_open(paths)
+    for reason in failures:
+        print(f"mdview: {reason}", file=sys.stderr)
+    code = run(list(sys.argv[:1]), paths=paths)
+    return EXIT_ERROR if failures and code == 0 else code
 
 
 def main(argv: list[str] | None = None) -> int:

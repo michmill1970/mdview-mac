@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -189,3 +190,20 @@ def test_for_browser_mode_uses_file_urls(dark_palette: Palette, demo_file: Path)
     page = render_page("x", options)
     assert "file://" in page.html
     assert "mdview://" not in page.html
+
+
+def test_content_bottom_padding_clears_the_zoom_bar() -> None:
+    """Phase 6: the last content line must never hug the bottom zoom bar.
+
+    The Qt side guarantees the web viewport ends above the bar; this is the
+    page-side half of that contract -- ``.md-content`` keeps 4em of reading
+    rhythm *plus a constant 24px* of bottom padding.
+    """
+    css_path = Path(__file__).resolve().parent.parent / "src" / "mdview" / "static" / "mdview.css"
+    css = css_path.read_text(encoding="utf-8")
+    rule = re.search(r"\.md-content\s*\{[^}]*?padding:([^;]+);", css, re.DOTALL)
+    assert rule is not None, ".md-content lost its padding declaration"
+    padding = " ".join(rule.group(1).split())
+    assert padding.endswith("calc(var(--mdv-font-size) * 4 + 24px);") or padding.endswith(
+        "calc(var(--mdv-font-size) * 4 + 24px)"
+    ), f"unexpected bottom padding: {padding}"

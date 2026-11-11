@@ -14,18 +14,72 @@ from pathlib import Path
 
 from mdview.core.errors import DocumentError
 
-__all__ = ["SUPPORTED_SUFFIXES", "Document", "is_supported"]
+__all__ = [
+    "SUPPORTED_SUFFIXES",
+    "Document",
+    "error_page_markdown",
+    "inspect_openable",
+    "is_supported",
+]
 
 SUPPORTED_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown"})
 #: Document types registered in Info.plist must match this set exactly.
+#: This governs *Finder* double-click registration only -- it is deliberately
+#: NOT a gate for opening a path the user named explicitly (see
+#: :func:`inspect_openable`; DESIGN.md "Open-file policy").
 
 _ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$")
 _FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
+#: Bytes sniffed for the "this is binary, not text" decision.
+_SNIFF_BYTES = 8192
+
 
 def is_supported(path: Path | str) -> bool:
-    """Whether a path has a viewable suffix."""
+    """Whether a path has a suffix Finder will route to MDView."""
     return Path(path).suffix.lower() in SUPPORTED_SUFFIXES
+
+
+def inspect_openable(path: Path | str) -> str | None:
+    """Why ``path`` cannot be opened right now, or ``None`` if it can.
+
+    Policy (Phase 6 decision, DESIGN.md "Open-file policy"): a path the user
+    named explicitly is opened *as Markdown* whatever its suffix -- a ``.txt``
+    file is friendlier to view than to refuse.  Only genuinely unviewable
+    inputs fail: missing files, directories, unreadable files, and files that
+    do not look like text.  Both the GUI (error tabs) and the CLI (exit codes)
+    classify through this one function, so their verdicts cannot drift.
+    """
+    p = Path(path).expanduser()
+    if p.is_dir():
+        return f"not a file: {p} is a directory"
+    if not p.exists():
+        return f"file not found: {p}"
+    try:
+        with p.open("rb") as handle:
+            head = handle.read(_SNIFF_BYTES)
+    except OSError as exc:
+        return f"cannot read {p}: {exc.strerror or exc}"
+    if b"\x00" in head:
+        return f"not a text file: {p}"
+    return None
+
+
+def error_page_markdown(path: Path | str, reason: str) -> str:
+    """The Markdown body of an error tab (rendered like any other page)."""
+    p = Path(path)
+    lines = [
+        f"# Can’t open `{p.name}`",  # noqa: RUF001 - typographic apostrophe is intentional
+        "",
+        f"**{reason}**",
+        "",
+        f"- Full path: `{p.expanduser()}`",
+        "- MDView opens any readable UTF-8 text file by path; a `.md` suffix",
+        "  is not required — the suffix only controls Finder registration.",
+        "- Fix the path (*File ▸ Open…* or drag the file into the window)",
+        "  and open it again.",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 @dataclass(frozen=True, slots=True)

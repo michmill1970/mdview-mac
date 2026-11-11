@@ -207,8 +207,11 @@ def run(argv: Sequence[str] = (), *, paths: Sequence[Path] = ()) -> int:
     context = bootstrap(argv)
     for warning in context.startup_warnings:
         print(f"mdview: {warning}", file=sys.stderr)
-    to_open = list(paths) or [Path(p) for p in context.settings.open_files]
+    explicit = list(paths)
+    to_open = explicit or [Path(p) for p in context.settings.open_files]
     if to_open:
-        context.window.open_paths(to_open)
+        # Startup session restore is not an explicit open request: a file that
+        # vanished since last run is skipped quietly instead of tabifying.
+        context.window.open_paths(to_open, quiet_missing=not explicit)
     context.window.show()
     return int(context.app.exec())

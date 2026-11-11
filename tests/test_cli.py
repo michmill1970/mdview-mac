@@ -132,14 +132,84 @@ class TestRenderCommand:
         html = capsys.readouterr().out
         assert 'data-appearance="dark"' in html
 
-    def test_unsupported_extension_exit_2(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    def test_txt_extension_renders_now(
+        self, seeded_vendor: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        bogus = tmp_path / "notes.txt"
-        bogus.write_text("hi", encoding="utf-8")
-        assert cli.main(["render", str(bogus)]) == cli.EXIT_USAGE
-        assert "not a Markdown file" in capsys.readouterr().err
+        """Phase 6 policy: any readable text file renders as Markdown.
+
+        ``.txt`` used to exit 2 ("not a Markdown file"); viewing it is the
+        friendlier choice (DESIGN.md "Open-file policy").
+        """
+        text = tmp_path / "notes.txt"
+        text.write_text("# plain wins\n", encoding="utf-8")
+        assert cli.main(["render", str(text)]) == 0
+        assert "plain wins" in capsys.readouterr().out
+
+    def test_directory_exit_2(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        assert cli.main(["render", str(tmp_path)]) == cli.EXIT_USAGE
+        assert "directory" in capsys.readouterr().err
 
     def test_missing_file_exit_1(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         assert cli.main(["render", str(tmp_path / "gone.md")]) == cli.EXIT_ERROR
         assert "mdview:" in capsys.readouterr().err
+
+
+class TestOpenExitCodes:
+    """Phase 6: ``mdview open good.md missing.md`` must report partial failure.
+
+    The app still opens (and renders) every good path; the *exit code* tells
+    scripts that something failed.  ``mdview.viewer.application.run`` is
+    patched so no Qt event loop runs in-process.
+    """
+
+    @pytest.fixture
+    def launched(self, monkeypatch: pytest.MonkeyPatch) -> list[list[Path]]:
+        calls: list[list[Path]] = []
+
+        def fake_run(argv: list[str], *, paths: object = ()) -> int:
+            assert isinstance(paths, list)
+            calls.append(list(paths))
+            return 0
+
+        monkeypatch.setattr("mdview.viewer.application.run", fake_run)
+        return calls
+
+    def test_all_paths_good_exit_0(
+        self, launched: list[list[Path]], demo_file: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert cli.main(["open", str(demo_file)]) == 0
+        assert launched == [[demo_file]]
+        assert capsys.readouterr().err == ""
+
+    def test_missing_path_nonzero_but_still_opens(
+        self,
+        launched: list[list[Path]],
+        demo_file: Path,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        missing = tmp_path / "kitchen-sink.md"
+        code = cli.main(["open", str(demo_file), str(missing)])
+        assert code == cli.EXIT_ERROR
+        # The failure must not block the successful tab: both paths went to the GUI.
+        assert launched == [[demo_file, missing]]
+        err = capsys.readouterr().err
+        assert "file not found" in err
+        assert "kitchen-sink.md" in err
+
+    def test_app_exit_code_wins_when_app_fails(
+        self, launched: list[list[Path]], demo_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("mdview.viewer.application.run", lambda argv, *, paths=(): 7)
+        assert cli.main(["open", str(demo_file)]) == 7
+
+    def test_preflight_reasons(self, demo_file: Path, tmp_path: Path) -> None:
+        missing = tmp_path / "gone.md"
+        blob = tmp_path / "blob.md"
+        blob.write_bytes(b"x\x00y")
+        reasons = cli.preflight_open([demo_file, missing, tmp_path, blob])
+        assert len(reasons) == 3
+        assert any("file not found" in r for r in reasons)
+        assert any("directory" in r for r in reasons)
+        assert any("not a text file" in r for r in reasons)
+        assert cli.preflight_open([demo_file]) == []

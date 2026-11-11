@@ -9,7 +9,7 @@ here.  That is what keeps the GUI thin enough to test headlessly.
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -20,6 +20,7 @@ from PySide6.QtWebEngineCore import QWebEngineProfile
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStackedWidget,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -37,7 +39,7 @@ from mdview.core.appearance import (
     AppearanceMode,
     appearance_mode_values,
 )
-from mdview.core.document import Document, is_supported
+from mdview.core.document import Document, error_page_markdown, inspect_openable
 from mdview.core.errors import AssetError, DocumentError
 from mdview.core.fonts import FONT_SIZE_MAX_PX, FONT_SIZE_MIN_PX, FontSize
 from mdview.core.palette import Palette, PaletteRegistry
@@ -130,6 +132,7 @@ class MainWindow(QMainWindow):
             "nextTab": lambda: self._model.activate_next(),
             "previousTab": lambda: self._model.activate_previous(),
             "reveal": self._reveal_current_folder,
+            "showHelp": self._show_help,
         }
         specs: tuple[tuple[str, str, QKeySequence | None], ...] = (
             ("open", "&Open…", QKeySequence(QKeySequence.StandardKey.Open)),
@@ -142,10 +145,12 @@ class MainWindow(QMainWindow):
             ("previousTab", "Select &Previous Tab", QKeySequence("Ctrl+Shift+Tab")),
             ("nextTab", "Select &Next Tab", QKeySequence("Ctrl+Tab")),
             ("reveal", "Reveal in &Finder", QKeySequence("Ctrl+Shift+F")),
+            # ⌘? on macOS, F1 elsewhere; the conventional macOS help-menu entry.
+            ("showHelp", "MDView &Help", QKeySequence(QKeySequence.StandardKey.HelpContents)),
         )
         for name, text, shortcut in specs:
             action = QAction(text, self)
-            if shortcut is not None:
+            if shortcut is not None and not shortcut.isEmpty():
                 action.setShortcut(shortcut)
             action.triggered.connect(handlers[name])
             self._actions[name] = action
@@ -211,6 +216,31 @@ class MainWindow(QMainWindow):
         palettes_menu.addAction(self._actions["editPalettes"])
         self._build_palette_menus()
 
+        # Native macOS convention (Phase 6): Qt6 exposes *no* public
+        # WindowRole/HelpRole -- QCocoaMenuBar instead detects these menus by
+        # their titles ("Window"/"Help", localized) and moves them to their
+        # standard slots: the Window menu becomes the AppKit windows menu
+        # (window list + "Enter Full Screen" appended by Cocoa) and the Help
+        # menu gains the Spotlight search field.  So the titles matter; the
+        # conventional items are ours on every platform.
+        window_menu = bar.addMenu("&Window")
+        window_menu.setObjectName("windowMenu")
+        minimize = QAction("Mi&nimize", self)
+        minimize.setShortcut(QKeySequence("Ctrl+M"))  # ⌘M on macOS (Qt Control==Command)
+        minimize.triggered.connect(self.showMinimized)
+        window_menu.addAction(minimize)
+        zoom = QAction("&Zoom", self)
+        zoom.triggered.connect(self._toggle_zoom)
+        window_menu.addAction(zoom)
+        window_menu.addSeparator()
+        front = QAction("Bring &All to Front", self)
+        front.triggered.connect(self._bring_all_to_front)
+        window_menu.addAction(front)
+
+        help_menu = bar.addMenu("&Help")
+        help_menu.setObjectName("helpMenu")
+        help_menu.addAction(self._actions["showHelp"])
+
     def _build_palette_menus(self) -> None:
         menus: tuple[tuple[QMenu, Appearance], ...] = (
             (self._light_palette_menu, "light"),
@@ -236,22 +266,56 @@ class MainWindow(QMainWindow):
                 menu.addAction(action)
 
     def _make_toolbar(self) -> None:
-        """The UI control for text size (requirement: shortcuts *and* a control)."""
+        """The UI control for text size (requirement: shortcuts *and* a control).
+
+        Phase 6 macOS field report: a bare ``QToolBar`` with text actions sits
+        its first bezel flush against the window edge, and the bottom-bar
+        chrome clipped the "Zoom Out" label ("oom Out").  So the bar hosts one
+        widget whose layout owns the margins: nothing can clip or crowd the
+        edge at any window width (geometry-tested at 640 px).
+        """
         toolbar = QToolBar("Text Size", self)
         toolbar.setObjectName("zoomToolbar")
         toolbar.setMovable(False)
         toolbar.setFloatable(False)
         self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, toolbar)
-        toolbar.addAction(self._actions["zoomOut"])
-        self._font_spin = QSpinBox(toolbar)
+
+        host = QWidget(toolbar)
+        host.setObjectName("zoomBar")
+        row = QHBoxLayout(host)
+        # Vertical margins stay small on purpose: every bar pixel shrinks the
+        # web view, and the demo below-fold shot needs quote→diagram to fit
+        # one viewport (shot_below_fold measures the feasible scroll window).
+        row.setContentsMargins(16, 2, 16, 2)
+        row.setSpacing(8)
+
+        self._zoom_out_button = QToolButton(host)
+        self._zoom_out_button.setObjectName("zoomOutButton")
+        self._zoom_out_button.setDefaultAction(self._actions["zoomOut"])
+        self._zoom_out_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._zoom_out_button.setAutoRaise(True)  # flat pill, keeps the bar slim
+        self._zoom_out_button.setToolTip("Decrease text size (⌘-)")
+
+        self._font_spin = QSpinBox(host)
         self._font_spin.setObjectName("fontSizeSpin")
         self._font_spin.setRange(FONT_SIZE_MIN_PX, FONT_SIZE_MAX_PX)
         self._font_spin.setSuffix(" px")
         self._font_spin.setToolTip("Text size (⌘= bigger, ⌘- smaller, ⌘0 reset)")
         self._font_spin.setValue(self._fonts.size_px)
         self._font_spin.valueChanged.connect(self._spin_changed)
-        toolbar.addWidget(self._font_spin)
-        toolbar.addAction(self._actions["zoomIn"])
+
+        self._zoom_in_button = QToolButton(host)
+        self._zoom_in_button.setObjectName("zoomInButton")
+        self._zoom_in_button.setDefaultAction(self._actions["zoomIn"])
+        self._zoom_in_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._zoom_in_button.setAutoRaise(True)
+        self._zoom_in_button.setToolTip("Increase text size (⌘=)")
+
+        row.addWidget(self._zoom_out_button)
+        row.addWidget(self._font_spin)
+        row.addWidget(self._zoom_in_button)
+        row.addStretch(1)
+        toolbar.addWidget(host)
 
     def _make_empty_state(self) -> QWidget:
         widget = QWidget(self)
@@ -269,26 +333,45 @@ class MainWindow(QMainWindow):
         return widget
 
     # -------------------------------------------------------- public API --
-    def open_paths(self, paths: Iterable[Path | str]) -> None:
-        """Open files; unsupported or unreadable ones only produce a status message."""
+    def open_paths(self, paths: Iterable[Path | str], *, quiet_missing: bool = False) -> list[str]:
+        """Open files; every failure opens an error tab instead of failing silently.
+
+        Phase 6: ``mdview open a.md missing.md`` used to swallow the missing
+        file.  Now each path that cannot be opened (not found, a directory,
+        unreadable, binary) gets a themed error tab naming the path and the
+        reason, so the successful tabs and the failure are both visible.
+        Readable text files open *as Markdown whatever their suffix* — a
+        ``.txt`` is friendlier to view than to refuse (DESIGN.md "Open-file
+        policy").  ``quiet_missing`` is for startup session restore only: a
+        path that vanished since last run is skipped, not tabified.
+
+        Returns one human-readable reason per failure (the CLI turns a
+        non-empty list into a non-zero exit code).
+        """
         problems: list[str] = []
-        opened = False
+        touched = False
         for raw in paths:
             path = Path(raw)
-            if not is_supported(path):
-                problems.append(f"{path.name}: not a Markdown file")
-                continue
-            try:
-                tab = self._model.open_path(path)
-            except DocumentError as exc:
-                problems.append(str(exc))
-                continue
-            opened = True
+            reason = inspect_openable(path)
+            if reason is not None:
+                if quiet_missing and reason.startswith("file not found:"):
+                    continue
+                problems.append(reason)
+                tab = self._model.open_error(path, reason)
+            else:
+                try:
+                    tab = self._model.open_path(path)
+                except DocumentError as exc:  # raced with the check; still visible
+                    reason = str(exc)
+                    problems.append(reason)
+                    tab = self._model.open_error(path, reason)
             self._prepare_tab(tab)
+            touched = True
         if problems:
             self.statusBar().showMessage("; ".join(problems[:3]), 8000)
-        if opened:
+        if touched:
             self._persist_settings()
+        return problems
 
     def tab_count(self) -> int:
         return self._model.count
@@ -336,9 +419,19 @@ class MainWindow(QMainWindow):
         )
 
     def render_tab(self, tab: Tab) -> RenderedPage:
-        """Render one tab's document and show it (the core does all the work)."""
-        page = render_page(tab.document.read(), self.render_options(tab))
-        self._scheme_handler.add_document_root(tab.document.path.parent)
+        """Render one tab's document -- or its error page -- and show it.
+
+        Error tabs (``tab.error``) render through the *same* page pipeline as
+        documents, so failed opens read like every other tab (same palette,
+        fonts, theme switching) instead of being a second, uglier UI.
+        """
+        if tab.error is not None:
+            source = error_page_markdown(tab.document.path, tab.error)
+        else:
+            source = tab.document.read()
+        page = render_page(source, self.render_options(tab))
+        if tab.error is None:
+            self._scheme_handler.add_document_root(tab.document.path.parent)
         view = self._tab_view.view_for(tab.tab_id)
         if view is not None:
             view.show_page(page, page_id=page_id_for(tab.tab_id))
@@ -433,10 +526,27 @@ class MainWindow(QMainWindow):
         if tab is not None and sys.platform == "darwin":
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(tab.document.path.parent)))
 
+    def _show_help(self) -> None:
+        """Help ▸ MDView Help: the shortcut sheet (macOS keeps Help for the app)."""
+        QMessageBox.information(
+            self,
+            "MDView Help",
+            "<p><b>MDView</b> renders Markdown offline: tabs, palettes, KaTeX, Mermaid.</p>"
+            "<ul>"
+            "<li><kbd>⌘O</kbd> Open &nbsp; <kbd>⌘W</kbd> Close tab &nbsp; "
+            "<kbd>⌘R</kbd> Reload</li>"
+            "<li><kbd>⌘=</kbd> / <kbd>⌘-</kbd> Text size &nbsp; <kbd>⌘0</kbd> Reset"
+            " &nbsp; (zoom bar: bottom of the window)</li>"
+            "<li><kbd>⌘1…⌘9</kbd> Jump to tab &nbsp; <kbd>⌃⇧Tab</kbd> / <kbd>⌃Tab</kbd> Cycle</li>"
+            "<li>Appearance and palettes live in their own menus.</li>"
+            "<li>Files changed on disk reload themselves automatically.</li>"
+            "</ul>",
+        )
+
     def _prepare_tab(self, tab: Tab) -> None:
         path = str(tab.document.path)
-        if path not in self._watcher.files():
-            self._watcher.addPath(path)
+        if tab.error is None and path not in self._watcher.files():
+            self._watcher.addPath(path)  # error paths typically do not exist to watch
         try:
             self.render_tab(tab)
         except AssetError as exc:
@@ -456,6 +566,21 @@ class MainWindow(QMainWindow):
             if path not in self._watcher.files() and Path(path).is_file():
                 self._watcher.addPath(path)
             self.statusBar().showMessage(f"Reloaded {Path(path).name}", 3000)
+
+    # ------------------------------------------------------- window menu --
+    def _toggle_zoom(self) -> None:
+        """The non-macOS Window ▸ Zoom: AppKit does this natively on macOS."""
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def _bring_all_to_front(self) -> None:
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, QWidget) and widget.isVisible():
+                widget.raise_()
+        self.raise_()
+        self.activateWindow()
 
     # ---------------------------------------------------------------- Qt --
     def _sync_tabs(self) -> None:
@@ -533,8 +658,3 @@ def resolve_initial_settings(settings: Settings, registry: PaletteRegistry) -> S
     light = settings.palette_light if registry.find(settings.palette_light) else defaults["light"]
     dark = settings.palette_dark if registry.find(settings.palette_dark) else defaults["dark"]
     return _with_fields(settings, palette_light=light, palette_dark=dark)
-
-
-def unsupported_paths(paths: Sequence[Path]) -> list[Path]:
-    """CLI helper: the files MDView will not open."""
-    return [path for path in paths if not is_supported(path)]

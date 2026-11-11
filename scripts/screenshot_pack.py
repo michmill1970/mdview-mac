@@ -238,12 +238,24 @@ def shot_below_fold(ctx: AppContext) -> list[tuple[str, Path]]:
     scroll_y = run_js(
         view,
         "(() => { const s = document.querySelector('.md-mermaid-svg svg');"
-        " if (!s) return 0;"
+        " const q = document.querySelector('blockquote');"
+        " if (!s || !q) return null;"
         " const bottom = s.getBoundingClientRect().bottom + scrollY;"
-        " return Math.max(0, Math.round(bottom) - innerHeight); })()",
+        " const top = q.getBoundingClientRect().top + scrollY;"
+        " return [Math.max(0, Math.round(bottom) - innerHeight - 4),"
+        " Math.round(top) + 4]; })()",
     )
-    if not isinstance(scroll_y, int):
+    if not isinstance(scroll_y, list) or len(scroll_y) != 2:
         raise RuntimeError(f"could not measure the below-fold scroll position: {scroll_y!r}")
+    lo, hi = (int(scroll_y[0]), int(scroll_y[1]))
+    if lo > hi:
+        raise RuntimeError(
+            f"below-fold features do not fit one viewport: need scroll >= {lo}px "
+            f"for the diagram and <= {hi}px for the quote (innerHeight too small?)"
+        )
+    # Prefer the classic anchor (diagram bottom at the fold = lo + 4) but
+    # never scroll so far that the quote's top rule leaves the viewport.
+    scroll_y = min(hi, lo + 4)
     view.run_script(f"window.mdview.setScrollY({scroll_y})")
     in_view = wait_js(
         view,
@@ -389,6 +401,30 @@ def shot_high_contrast(ctx: AppContext) -> tuple[str, Path]:
     return ("high-contrast", shoot(ctx.window, "high-contrast"))
 
 
+def shot_missing_file(ctx: AppContext) -> tuple[str, Path]:
+    """Error-tab state (Phase 6 defect 3): a good file + a missing one.
+
+    ``mdview open demo.md does-not-exist.md`` used to open the good tab and
+    swallow the failure; the missing path now gets a themed error tab naming
+    the path and reason -- and this shot lets the vision review check it.
+    """
+    window = ctx.window
+    set_palette(ctx, "github-light")
+    window._model.close_all()
+    window.open_paths([DEMO_DOC, EXAMPLES / "does-not-exist.md"])
+    assert window.tab_count() == 2
+    tab = window.current_tab()
+    assert tab is not None
+    assert tab.error is not None, "the missing file must be the active error tab"
+    view = window.current_view()
+    assert view is not None
+    wait_rendered(view, what="error tab")
+    heading = run_js(view, "document.querySelector('.md-content h1')?.textContent ?? ''")
+    if not isinstance(heading, str) or "Can’t open" not in heading:  # noqa: RUF001
+        raise RuntimeError(f"error tab did not render: {heading!r}")
+    return ("missing-file", shoot(window, "missing-file"))
+
+
 # ------------------------------------------------------------ validation --
 def distinct_colors(path: Path, grid: int = 64) -> int:
     """Count different colours on a ``grid``-point lattice across the PNG."""
@@ -446,6 +482,7 @@ def main() -> int:
     shots.append(shot_palette_editor(ctx))
     shots.append(shot_palette_editor_duplicate(ctx))
     shots.append(shot_high_contrast(ctx))
+    shots.append(shot_missing_file(ctx))
 
     fatal = [
         (tab.title, entry)

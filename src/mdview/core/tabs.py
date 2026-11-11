@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mdview.core.document import Document
+from mdview.core.document import Document, inspect_openable
 
 __all__ = ["Tab", "TabModel"]
 
@@ -34,10 +34,16 @@ class Tab:
     scroll_y: int = 0
     #: Set when the file changed on disk and the view is stale.
     stale: bool = False
+    #: When not ``None`` the tab shows an error page instead of the document:
+    #: the string is the human-readable reason (Phase 6: failed opens must be
+    #: visible, not silent).  Re-opening the path successfully clears it.
+    error: str | None = None
 
     @property
     def title(self) -> str:
-        return self.document.title
+        if self.error is None:
+            return self.document.title
+        return f"⚠ {self.document.title}"
 
 
 @dataclass(slots=True)
@@ -98,11 +104,20 @@ class TabModel:
 
     # ------------------------------------------------------------- write --
     def open_document(self, document: Document, *, activate: bool = True) -> Tab:
-        """Add a document, or focus the tab that already shows it."""
+        """Add a document, or focus the tab that already shows it.
+
+        Re-opening a path whose tab is showing an error page upgrades that
+        tab in place (same id, same position): the reason is cleared and the
+        caller re-renders the now-readable document.
+        """
         existing = self.find_by_path(document.path)
         if existing is not None:
+            recovered = existing.error is not None
+            existing.error = None
             if activate:
                 self.activate(existing.tab_id)
+            if recovered:
+                self._notify()  # the "⚠ " title prefix has to go, active or not
             return existing
         tab = Tab(tab_id=self._next_id, document=document)
         self._next_id += 1
@@ -115,6 +130,29 @@ class TabModel:
     def open_path(self, path: Path | str, *, activate: bool = True) -> Tab:
         """Convenience wrapper: :meth:`Document.open` + :meth:`open_document`."""
         return self.open_document(Document.open(path), activate=activate)
+
+    def open_error(self, path: Path | str, reason: str, *, activate: bool = True) -> Tab:
+        """Open (or upgrade) a tab showing *why* ``path`` could not be opened.
+
+        The tab holds a plain :class:`Document` handle for the path -- it is
+        never read while ``tab.error`` is set; the view renders
+        :func:`~mdview.core.document.error_page_markdown` instead.
+        """
+        document = Document(Path(path))
+        existing = self.find_by_path(document.path)
+        if existing is not None:
+            existing.error = reason
+            if activate:
+                self.activate(existing.tab_id)
+            self._notify()  # the tooltip carries the reason and must refresh
+            return existing
+        tab = Tab(tab_id=self._next_id, document=document, error=reason)
+        self._next_id += 1
+        self._tabs.append(tab)
+        if activate:
+            self._active_id = tab.tab_id
+        self._notify()
+        return tab
 
     def activate(self, tab_id: TabId) -> bool:
         """Make a tab active; returns whether the tab existed."""
@@ -225,11 +263,20 @@ class TabModel:
             self.on_change()
 
     def restore(self, paths: Iterable[Path | str], *, active_path: str | None = None) -> list[Tab]:
-        """Re-open the previous session (missing files are skipped)."""
+        """Re-open the previous session.
+
+        Missing files are skipped silently (a stale session is not a failed
+        open request), but a file that exists and cannot be opened gets an
+        error tab, like any explicit open (Phase 6: never fail silently).
+        """
         opened: list[Tab] = []
         for path in paths:
             doc = Document(path=Path(path))
             if not doc.exists:
+                continue
+            reason = inspect_openable(path)
+            if reason is not None:
+                opened.append(self.open_error(path, reason, activate=False))
                 continue
             opened.append(self.open_document(doc, activate=False))
         if not opened:

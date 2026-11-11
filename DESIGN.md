@@ -289,6 +289,43 @@ is pinned `False` so the titlebar stays a plain titlebar), and the app menu
 says "Python" when run unbundled (it comes from `Info.plist`'s `CFBundleName`
 = MDView in the packaged app).
 
+**Open-file policy** (Phase 6 field report). A path the user named
+explicitly — CLI argument, drag, `File ▸ Open…` — is opened *as Markdown*
+whatever its suffix: a `.txt` is friendlier to view than to refuse. Only
+genuinely unviewable inputs fail: missing files, directories, unreadable
+files, and files whose first 8 KiB contain a NUL byte (binary). The suffix
+set `SUPPORTED_SUFFIXES` deliberately governs **Finder registration only**
+(Info.plist must match it), never explicit opens. Both the GUI and the CLI
+classify through one pure-core function, `core.document.inspect_openable`,
+so their verdicts cannot drift; `mdview render` maps them to exit codes
+(missing → 1, directory/binary → 2), and `mdview open` opens every good
+path and exits non-zero if any failed, printing each reason to stderr.
+Startup session restore is the one quiet caller: a path that vanished while
+the app was closed is skipped, not announced.
+
+**Error tabs** (Phase 6). A failed open never fails silently: the path gets
+a normal tab titled `⚠ name` whose `Tab.error` holds the reason and whose
+body is `error_page_markdown()` rendered through the *same* pipeline as any
+document — themed, escaped, no special-case HTML. Re-opening the path once
+fixed upgrades the tab in place (same `tab_id`, watcher attaches then).
+Session restore classifies persisted paths the same way: existing-but-broken
+files come back as error tabs, missing ones are dropped.
+
+**Menu bar and zoom bar** (Phase 6). Qt 6 exposes no public
+`WindowRole`/`HelpRole` (the private `QPlatformMenuItem` roles are not in
+the API), so the Cocoa integration is title-driven: menus literally titled
+"Window"/"Help" are detected by `QCocoaMenuBar`, slotted natively, and gain
+the window list and Spotlight help search respectively; the conventional
+Minimize/Zoom/Bring All to Front items are ours on every platform. The
+bottom zoom bar is one `QToolBar` hosting a single widget whose layout owns
+the margins (`16,4,16,4` + trailing stretch) — a bare toolbar with text
+actions clipped its first label ("oom Out") flush at the window edge;
+`QToolButton`s with `defaultAction` keep tooltip and accessibility free.
+Content can't hug the bar: `.md-content` pads its bottom by the bar height
+plus 24 px, asserted from the CSS by contract test and pixel-tested by the
+screenshot pack (`scripts/screenshot_pack.py`, incl. `missing-file.png`
+showing an error tab).
+
 ## 8. Settings & on-disk layout
 
 ```
