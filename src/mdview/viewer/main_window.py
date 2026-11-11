@@ -197,7 +197,7 @@ class MainWindow(QMainWindow):
             self._appearance_actions[mode] = action
             appearance_menu.addAction(action)
 
-        palettes_menu = bar.addMenu("P&lettes")
+        palettes_menu = bar.addMenu("Pa&lettes")
         self._light_palette_menu = palettes_menu.addMenu("&Light Palette")
         self._dark_palette_menu = palettes_menu.addMenu("&Dark Palette")
         palettes_menu.addSeparator()

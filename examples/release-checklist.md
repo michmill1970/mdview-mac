@@ -13,9 +13,7 @@
 import json
 import subprocess
 
-frozen = subprocess.run(
-    ["uv", "pip", "freeze"], capture_output=True, text=True, check=True
-).stdout
+frozen = subprocess.run(["uv", "pip", "freeze"], capture_output=True, text=True, check=True).stdout
 assert "pyside6==6.12.0" in frozen.lower()
 ```
 

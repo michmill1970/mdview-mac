@@ -107,10 +107,43 @@ body.md-body {
   margin-left: -1.4em;
 }
 
+/* Task boxes are read-only, but the native look rendered as a faint grey
+   smudge (checked state nearly invisible) on light palettes -- so draw them:
+   clear bordered box unchecked, palette accent + white check when checked.
+   The border/text mixes keep both states visible on all four built-ins. */
 .md-content input[type="checkbox"] {
-  accent-color: var(--mdv-accent);
-  margin-right: 0.5em;
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 1.15em;
+  height: 1.15em;
+  margin: 0 0.5em 0 0;
+  vertical-align: -0.15em;
+  border: 2px solid color-mix(in srgb, var(--mdv-text) 45%, var(--mdv-border));
+  border-radius: 0.25em;
+  background: var(--mdv-background);
+  opacity: 1; /* disabled, but not dimmed (Chromium dims by default) */
   pointer-events: none; /* viewer: task boxes are read-only */
+}
+
+.md-content input[type="checkbox"]:checked {
+  position: relative;
+  background-color: var(--mdv-accent);
+  border-color: color-mix(in srgb, var(--mdv-accent) 80%, var(--mdv-text));
+}
+
+/* White check drawn with borders (no image data: offline contract forbids
+   even data-URI URLs in the static files). */
+.md-content input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 47%;
+  width: 0.28em;
+  height: 0.56em;
+  border: solid #fff;
+  border-width: 0 0.15em 0.15em 0;
+  transform: translate(-42%, -50%) rotate(45deg);
 }
 
 /* ---------------------------------------------------------------- tables -- */

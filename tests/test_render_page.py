@@ -30,6 +30,24 @@ def test_asset_gate_requires_vendored_files(demo_file: Path, dark_palette: Palet
         render_page("# x", PageOptions(palette=dark_palette, document_dir=demo_file.parent))
 
 
+def test_task_checkboxes_are_themed_not_native() -> None:
+    """Native checkbox rendering (a faint grey box) must stay replaced.
+
+    The palette-editor review flagged checked task boxes as near-invisible on
+    light palettes; mdview.css therefore draws them itself, accent-filled with
+    a white check, and every palette must be able to drive that styling.
+    """
+    css_path = Path(__file__).resolve().parent.parent / "src" / "mdview" / "static" / "mdview.css"
+    css = css_path.read_text(encoding="utf-8")
+    assert "appearance: none" in css
+    box = css.split('input[type="checkbox"]', 1)[1]
+    base_rule, checked_rules = box.split(":checked", 1)
+    assert "var(--mdv-border)" in base_rule  # unchecked boxes keep a real border
+    assert "var(--mdv-accent)" in checked_rules
+    assert "rotate(45deg)" in checked_rules  # the white check is a CSS border glyph
+    assert "#fff" in checked_rules
+
+
 def test_page_structure_and_escaping(dark_palette: Palette, options: PageOptions) -> None:
     page = render_page("# Hi $x^2$\n\n```mermaid\nA-->B\n```\n", options)
     html = page.html

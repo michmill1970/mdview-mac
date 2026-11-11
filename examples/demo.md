@@ -3,6 +3,15 @@
 A tour of everything the renderer does — all of it offline, from assets
 shipped on disk.
 
+## Links & images
+
+Normal links open in your browser: [CommonMark](https://commonmark.org),
+[Mermaid](https://mermaid.js.org) and [KaTeX](https://katex.org) — same-window
+navigation only ever happens inside `mdview://`. Images are served from this
+document's folder:
+
+![the MDView mark](images/logo.png)
+
 ## Math (KaTeX, local)
 
 Inline math like $e^{i\pi} + 1 = 0$ and display math:
@@ -16,16 +25,16 @@ $$
 | Feature | Where |
 | --- | --- |
 | Tables | this one |
-| [x] → ✅ task lists | below |
+| Task lists | below as checkboxes |
 | ~~Strikethrough~~ | this row |
 | `inline code` | everywhere |
+
+> Blockquotes keep their left rule, the theme's border colour, and nested
+> *emphasis*, obviously.
 
 - [x] Multi-tab editing of the same document reloads cleanly
 - [x] Palette changes apply without losing scroll position
 - [ ] World domination
-
-> Blockquotes keep their left rule, the theme's border colour, and nested
-> *emphasis*, obviously.
 
 ## Highlighted code (Pygments, recoloured by the active palette)
 
@@ -41,12 +50,6 @@ class FontSize:
         return round(self.size_px / 16 * 100)
 ```
 
-```rust
-fn main() {
-    println!("syntax themes are generated from the palette, not prebuilt");
-}
-```
-
 ## Diagrams (Mermaid, local)
 
 ```mermaid
@@ -58,12 +61,3 @@ graph LR
     E --> F[QtWebEngine]
     C --> D
 ```
-
-## Images (served from this document's folder)
-
-![the MDView mark](images/logo.png)
-
-## Links
-
-Normal links open in your browser: <https://commonmark.org> — same-window
-navigation only ever happens inside `mdview://`.

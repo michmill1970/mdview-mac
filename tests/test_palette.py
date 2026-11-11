@@ -48,6 +48,13 @@ def test_all_ship_builtins_are_valid_and_typed() -> None:
         assert palette.builtin is True
 
 
+def test_high_contrast_code_chip_distinguishes_from_white() -> None:
+    """#f2f2f2 was judged too subtle on white in the vision review (item 7)."""
+    path = Path("src/mdview/palettes/high-contrast-light.json")
+    palette = load_palette_file(path, builtin=True)
+    assert palette.colors["code_bg"] == "#e0e0e0"
+
+
 def test_optional_keys_get_fallbacks(dark_palette: Palette) -> None:
     raw = dark_palette.to_dict()
     for key in ("syntax_operator", "syntax_type", "syntax_invalid", "scrollbar", "code_border"):

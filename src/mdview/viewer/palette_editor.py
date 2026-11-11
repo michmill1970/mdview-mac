@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
@@ -76,28 +76,69 @@ _COLOR_LABELS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: Shown while a built-in palette is selected: Save stays enabled, but the
+#: result is a *user* file that shadows the built-in (the documented design).
+_BUILTIN_HINT = "Built-in palette — saving creates a user copy"
+
+
+def css_hex_to_qcolor(value: str) -> QColor:
+    """Parse an mdview hex colour (CSS semantics) into a QColor.
+
+    ``QColor`` treats 8-digit hex as ``#AARRGGBB``, but palette values -- and
+    the CSS they become -- are ``#RRGGBBAA``.  Without the reorder a 20%-alpha
+    selection colour would render at 3% alpha and the wrong hue.
+    """
+    text = value.strip()
+    if len(text) == 9 and text[0] == "#" and all(c in "0123456789abcdef" for c in text[1:].lower()):
+        text = f"#{text[7:9]}{text[1:7]}"  # RRGGBBAA -> AARRGGBB (Qt's order)
+    return QColor(text)
+
+
 class _SwatchButton(QPushButton):
-    """A 24px colour chip; clicking opens the native colour picker."""
+    """A 24x18px colour chip over a checkerboard; clicking opens the picker.
+
+    The checkerboard sits *under* the colour fill: translucent colours such as
+    ``#0969da33`` (selection) were near-invisible on the light dialog
+    background when painted over a plain base.
+    """
 
     color_picked = Signal(str)
+
+    _CHECKER_STEP = 4  # px squares, deliberately tiny so the chip still reads as one colour
+    _CHECKER_DARK = QColor("#c8c8c8")
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedSize(QSize(28, 22))
         self.setToolTip("Pick a colour")
+        self._value = ""
         self.clicked.connect(self._pick)
 
     def set_hex(self, value: str) -> None:
+        self._value = value
         pixmap = QPixmap(24, 18)
-        pixmap.fill(QColor(value) if value else QColor("#808080"))
+        pixmap.fill(QColor("#ffffff"))
+        painter = QPainter(pixmap)
+        for row, y in enumerate(range(0, pixmap.height(), self._CHECKER_STEP)):
+            for column, x in enumerate(range(0, pixmap.width(), self._CHECKER_STEP)):
+                if (row + column) % 2:
+                    self._checker_square(painter, x, y)
+        color = css_hex_to_qcolor(value)
+        if color.isValid() and color.alpha() > 0:
+            painter.fillRect(pixmap.rect(), color)  # source-over: alpha blends with the checker
+        painter.end()
         self.setIcon(QIcon(pixmap))
 
+    def _checker_square(self, painter: QPainter, x: int, y: int) -> None:
+        painter.fillRect(x, y, self._CHECKER_STEP, self._CHECKER_STEP, self._CHECKER_DARK)
+
     def _pick(self) -> None:
-        current = self.icon().pixmap(1, 1)
-        initial = QColor(current.toImage().pixelColor(0, 0)) if not current.isNull() else QColor()
-        color = QColorDialog.getColor(initial, self, "Choose colour")
+        # Read the raw hex, not the composited pixels: the checkerboard under
+        # translucent colours would poison a pixel-sampled initial value.
+        color = QColorDialog.getColor(css_hex_to_qcolor(self._value), self, "Choose colour")
         if color.isValid():
-            self.color_picked.emit(color.name(QColor.NameFormat.HexArgb))
+            # HexArgb would emit Qt's "#aarrggbb"; palettes/CSS speak #rrggbb(aa).
+            self.color_picked.emit(color.name(QColor.NameFormat.HexRgb))
 
 
 class _AppearanceCombo(QComboBox):
@@ -162,6 +203,12 @@ class PaletteEditor(QDialog):
         self._appearance_combo.currentIndexChanged.connect(lambda _=None: self._on_edited())
         top.addWidget(self._appearance_combo)
         form.addLayout(top)
+
+        self._builtin_hint = QLabel("", form_host)
+        self._builtin_hint.setObjectName("paletteBuiltinHint")
+        self._builtin_hint.setWordWrap(True)
+        self._builtin_hint.setVisible(False)
+        form.addWidget(self._builtin_hint)
 
         self._errors = QLabel("", form_host)
         self._errors.setObjectName("paletteErrors")
@@ -254,14 +301,30 @@ class PaletteEditor(QDialog):
             line.blockSignals(False)
             swatch.set_hex(value)
         self._errors.setText("")
+        self._sync_chrome()
         self._button_box.button(QDialogButtonBox.StandardButton.Save).setEnabled(True)
+
+    def _sync_chrome(self) -> None:
+        """Window title + built-in hint follow the selected palette."""
+        self.setWindowTitle(f"Edit Palette — {self._base.name}")
+        self._builtin_hint.setText(_BUILTIN_HINT if self._base.builtin else "")
+        self._builtin_hint.setVisible(self._base.builtin)
 
     def _on_edited(self) -> None:
         self._revert_button.setEnabled(True)
+        self._sync_swatches()
         candidate, problems = self._candidate()
         self._validate(problems)
         if not problems:
             self.palette_previewed.emit(candidate)
+
+    def _sync_swatches(self) -> None:
+        """Repaint every swatch from its field, as typed (not just via the picker)."""
+        for _key, (line, swatch) in self._rows.items():
+            try:
+                swatch.set_hex(normalize_hex_color(line.text()))
+            except ValueError:
+                swatch.set_hex("")  # empty or invalid -> bare checkerboard
 
     def _candidate(self) -> tuple[Palette, list[str]]:
         """Build the edited palette and report every problem with it."""
@@ -310,10 +373,9 @@ class PaletteEditor(QDialog):
 
     # ------------------------------------------------------------ actions --
     def _set_color(self, key: str, value: str) -> None:
-        line, swatch = self._rows[key]
+        line, _swatch = self._rows[key]
         line.setText(value)
-        swatch.set_hex(value)
-        self._on_edited()
+        self._on_edited()  # keeps the swatch, validation, and preview in step
 
     def _duplicate(self) -> None:
         candidate, problems = self._candidate()

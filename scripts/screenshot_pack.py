@@ -28,7 +28,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QPoint
 from PySide6.QtGui import QImage, QPainter
-from PySide6.QtWidgets import QLineEdit, QWidget
+from PySide6.QtWidgets import QDialogButtonBox, QLineEdit, QWidget
 
 from mdview.core.paths import DATA_DIR_ENV_VAR
 from mdview.viewer.application import AppContext, bootstrap
@@ -190,6 +190,16 @@ def shot_palette_pack(ctx: AppContext) -> list[tuple[str, Path]]:
     demo_view = window.current_view()
     assert demo_view is not None
     wait_rendered(demo_view, diagrams=1, images=1)
+    # the moved-up Links & images section must be inside the first viewport
+    top_view = run_js(
+        demo_view,
+        "(() => { const a = document.querySelector('.md-content a');"
+        " const i = document.querySelector('img');"
+        " return [a ? a.getBoundingClientRect().bottom < innerHeight : false,"
+        " i ? i.getBoundingClientRect().bottom < innerHeight : false]; })()",
+    )
+    if top_view != [True, True]:
+        raise RuntimeError(f"links/image are not visible in the first viewport: {top_view}")
     shots = [("main-light", shoot(window, "main-light"))]
 
     set_palette(ctx, "github-dark")
@@ -197,6 +207,68 @@ def shot_palette_pack(ctx: AppContext) -> list[tuple[str, Path]]:
 
     set_palette(ctx, "dracula-dark")
     shots.append(("main-dracula", shoot(window, "main-dracula")))
+    return shots
+
+
+BELOW_FOLD_FEATURES_JS = """(() => {
+  const full = (el) => { if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.top >= -4 && r.bottom <= innerHeight + 4; };
+  return {
+    mermaid: full(document.querySelector('.md-mermaid-svg svg')),
+    code: full(document.querySelector('.md-code'))
+          && !!document.querySelector('.md-code-inner span[class]'),
+    quote: full(document.querySelector('blockquote')),
+    task: full(document.querySelector('input[type="checkbox"]:checked')),
+  };
+})()"""
+
+
+def shot_below_fold(ctx: AppContext) -> list[tuple[str, Path]]:
+    """Scroll demo.md to its tail and re-shoot light / dark / dracula.
+
+    Anchors the Mermaid diagram's bottom edge to the fold (scrollY 0 shows the
+    moved-up Links & images section instead), so one viewport covers quote,
+    task checkboxes, syntax-highlighted code, and the diagram.
+    """
+    window = ctx.window
+    view = window.current_view()
+    assert view is not None
+
+    scroll_y = run_js(
+        view,
+        "(() => { const s = document.querySelector('.md-mermaid-svg svg');"
+        " if (!s) return 0;"
+        " const bottom = s.getBoundingClientRect().bottom + scrollY;"
+        " return Math.max(0, Math.round(bottom) - innerHeight); })()",
+    )
+    if not isinstance(scroll_y, int):
+        raise RuntimeError(f"could not measure the below-fold scroll position: {scroll_y!r}")
+    view.run_script(f"window.mdview.setScrollY({scroll_y})")
+    in_view = wait_js(
+        view,
+        BELOW_FOLD_FEATURES_JS,
+        lambda v: isinstance(v, dict) and v.get("mermaid") is True and v.get("code") is True,
+        "code block and Mermaid diagram to enter the viewport",
+        timeout_ms=20_000,
+    )
+    assert isinstance(in_view, dict)
+    missing = [key for key in ("quote", "task") if in_view.get(key) is not True]
+    if missing:
+        raise RuntimeError(f"below-fold viewport misses {missing} at scroll {scroll_y}px")
+    print(f"below-fold shots at scrollY={scroll_y}px, features in view: {in_view}")
+
+    shots: list[tuple[str, Path]] = []
+    for palette_id, name in (
+        ("github-light", "main-light-below"),
+        ("github-dark", "main-dark-below"),
+        ("dracula-dark", "dracula-below"),
+    ):
+        set_palette(ctx, palette_id)
+        shots.append((name, shoot(window, name)))
+
+    view.run_script("window.mdview.setScrollY(0)")
+    wait_js(view, "scrollY", lambda v: v == 0, "scroll restored to top", 10_000)
     return shots
 
 
@@ -271,6 +343,46 @@ def shot_palette_editor(ctx: AppContext) -> tuple[str, Path]:
     return ("palette-editor", path)
 
 
+def shot_palette_editor_duplicate(ctx: AppContext) -> tuple[str, Path]:
+    """Editor open on a DUPLICATED (user) palette: plain editable state, no built-in hint."""
+    window = ctx.window
+    view = window.current_view()
+    assert view is not None
+
+    editor = PaletteEditor(ctx.registry, ctx.registry.get("github-light"), window)
+    editor.palette_previewed.connect(window._preview_palette)
+    editor.resize(*EDITOR_SIZE)
+    editor.move(EDITOR_POS)
+    editor.show()
+    settle(800)
+
+    editor._duplicate_button.click()  # the real button: name -> "GitHub Light Copy"
+    save = editor._button_box.button(QDialogButtonBox.StandardButton.Save)
+    assert save.isEnabled(), "a duplicated palette must stay savable"
+    save.click()  # writes the user copy, refreshes the list, selects the copy
+    if not (editor.last_saved_path or "").endswith("github-light-copy.json"):
+        raise RuntimeError(f"unexpected save path: {editor.last_saved_path!r}")
+    if editor.windowTitle() != "Edit Palette — GitHub Light Copy":
+        raise RuntimeError(f"unexpected dialog title: {editor.windowTitle()!r}")
+
+    heading_line = editor.findChild(QLineEdit, "color_heading")
+    if heading_line is None:
+        raise RuntimeError("palette editor lost its color_heading field")
+    heading_line.setText("#d6320c")
+    heading_line.editingFinished.emit()  # same field flow as the main editor shot
+    wait_js(
+        view,
+        "getComputedStyle(document.querySelector('.md-content h1')).color",
+        lambda v: v == PREVIEW_HEADING_RGB,
+        "live palette preview to reach the page",
+        timeout_ms=15_000,
+    )
+    path = shoot_dialog(window, editor, "palette-editor-dup")
+    editor.reject()
+    settle(300)
+    return ("palette-editor-dup", path)
+
+
 def shot_high_contrast(ctx: AppContext) -> tuple[str, Path]:
     """Same document under the high-contrast-light preset."""
     set_palette(ctx, "high-contrast-light")
@@ -328,9 +440,11 @@ def main() -> int:
 
     window.open_paths([DEMO_DOC])
     shots = shot_palette_pack(ctx)
+    shots += shot_below_fold(ctx)
     shots.append(shot_tabs(ctx))
     shots.append(shot_font_large(ctx))
     shots.append(shot_palette_editor(ctx))
+    shots.append(shot_palette_editor_duplicate(ctx))
     shots.append(shot_high_contrast(ctx))
 
     fatal = [

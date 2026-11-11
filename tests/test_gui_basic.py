@@ -12,7 +12,9 @@ import json
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QDialogButtonBox
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QDialogButtonBox, QLabel
 
 from mdview.core.palette import PaletteRegistry
 from mdview.core.paths import AppDir, app_dir
@@ -84,6 +86,17 @@ class TestTabs:
 
 
 class TestAppearanceAndPalettes:
+    def test_palettes_menu_title(self, ctx: AppContext) -> None:
+        """The Palettes menu must *display* "Palettes" (ampersand is the mnemonic)."""
+        menus = {
+            menu.title(): menu
+            for action in ctx.window.menuBar().actions()
+            if (menu := action.menu()) is not None
+        }
+        palettes = [title for title in menus if title.replace("&", "").startswith("Palett")]
+        assert palettes == ["Pa&lettes"]
+        assert palettes[0].replace("&", "") == "Palettes"
+
     def test_appearance_mode_roundtrip(self, ctx: AppContext) -> None:
         window = ctx.window
         window.set_appearance_mode("dark")
@@ -164,3 +177,70 @@ class TestPaletteEditor:
         save = editor._button_box.button(QDialogButtonBox.StandardButton.Save)
         assert not save.isEnabled()
         assert "Cannot save" in editor._errors.text()
+
+
+class TestPaletteEditorSwatchesAndChrome:
+    """Widget-level checks driven by the field + editingFinished, like a user."""
+
+    def _editor(self, registry: object, qtbot: object, palette_id: str) -> PaletteEditor:
+        editor = PaletteEditor(registry, registry.get(palette_id))  # type: ignore[attr-defined]
+        qtbot.addWidget(editor)  # type: ignore[attr-defined]
+        return editor
+
+    def test_typing_hex_updates_swatch(self, registry: PaletteRegistry, qtbot: object) -> None:
+        """The PO's bug: page preview went orange, the swatch stayed black."""
+        editor = self._editor(registry, qtbot, "github-light")
+        line, swatch = editor._rows["heading"]
+        before = swatch.icon().pixmap(QSize(24, 18)).toImage().pixelColor(0, 0)
+        line.setText("#d6320c")
+        line.editingFinished.emit()  # exactly what losing focus in the field fires
+        image = swatch.icon().pixmap(QSize(24, 18)).toImage()
+        assert image.pixelColor(0, 0) == QColor("#d6320c")  # opaque -> exact, over checker
+        assert before != QColor("#d6320c")  # the old icon really did change
+
+    def test_alpha_swatch_renders_over_checkerboard(
+        self, registry: PaletteRegistry, qtbot: object
+    ) -> None:
+        editor = self._editor(registry, qtbot, "github-light")
+        swatch = editor._rows["selection"][1]
+        swatch.set_hex("#0969da33")  # translucent: invisible without the checker
+        image = swatch.icon().pixmap(QSize(24, 18)).toImage()
+        over_white = image.pixelColor(0, 0)  # (0,0) sits on a white square...
+        over_grey = image.pixelColor(5, 0)  # ...x=4..7 on the grey one
+        assert over_white != over_grey, "alpha must blend differently with each checker colour"
+        for pixel in (over_white, over_grey):
+            assert pixel.blue() > pixel.green() > pixel.red()  # still reads as the blue hue
+
+    def test_invalid_or_empty_hex_shows_bare_checker(
+        self, registry: PaletteRegistry, qtbot: object
+    ) -> None:
+        editor = self._editor(registry, qtbot, "github-light")
+        line, swatch = editor._rows["link"]
+        line.setText("nonsense")
+        line.editingFinished.emit()
+        image = swatch.icon().pixmap(QSize(24, 18)).toImage()
+        assert image.pixelColor(0, 0) != image.pixelColor(5, 0)  # no colour fill laid over it
+
+    def test_title_and_builtin_hint_follow_selection(
+        self, registry: PaletteRegistry, qtbot: object
+    ) -> None:
+        editor = self._editor(registry, qtbot, "github-light")
+        hint = editor.findChild(QLabel, "paletteBuiltinHint")
+        assert editor.windowTitle() == "Edit Palette — GitHub Light"
+        assert hint.text() == "Built-in palette — saving creates a user copy"
+        assert not hint.isHidden()
+        save = editor._button_box.button(QDialogButtonBox.StandardButton.Save)
+        assert save.isEnabled()  # documented design: Save shadows the built-in with a user copy
+
+        editor._select("github-dark")
+        assert editor.windowTitle() == "Edit Palette — GitHub Dark"
+        assert not hint.isHidden()
+
+        editor._name_edit.setText("My GitHub")  # saving turns the selection into a user palette
+        editor._on_edited()
+        editor._save()
+        assert editor.last_saved_path is not None
+        assert editor.windowTitle() == "Edit Palette — My GitHub"
+        assert hint.isHidden()
+        assert hint.text() == ""
+        assert save.isEnabled()
