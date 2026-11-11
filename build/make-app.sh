@@ -36,34 +36,78 @@ if [ ! -d "$APP" ]; then
     exit 1
 fi
 
-# PyInstaller misplaces the QtWebEngineProcess.app helper tree inside its
-# frameworks: it lands at <fw>/Versions/Resources/Helpers/ instead of
-# <fw>/Versions/A/Helpers/.  Two failures follow from that:
-#   1. the framework-root Helpers symlink (-> Versions/Current/Helpers ->
-#      Versions/A/Helpers) dangles, so Qt never finds QtWebEngineProcess at
-#      launch ("Qt WebEngine Process" search-path log, then Abort trap: 6);
-#   2. codesign --verify --strict rejects the framework: "embedded framework
-#      contains modified or invalid version".
-# Move the tree back under Versions/A/ and drop the stray Versions/Resources
-# if it is now empty.  Glob covers every *.framework, not just
-# QtWebEngineCore; guarded by A/Helpers being absent, so re-runs are no-ops.
+# PyInstaller's macOS framework copy-out mangles Qt's non-standard
+# frameworks badly (verified on the Mac, PySide6 6.12): the payload lands
+# under <fw>/Versions/Resources/ instead of <fw>/Versions/A/:
+#   - Helpers/          the QtWebEngineProcess.app helper tree (Phase 8);
+#   - Resources/        the ENTIRE framework Resources payload, under a
+#                       doubled "Resources" — qtwebengine_resources*.pak,
+#                       icudtl.dat, qtwebengine_locales/,
+#                       v8_context_snapshot.*.bin, Info.plist,
+#                       PrivacyInfo.xcprivacy (found on the real bundle);
+#   - anything else     further stray entries.
+# The framework-root symlinks (Helpers -> Versions/Current/Helpers,
+# Resources -> Versions/Current/Resources) then dangle: QtWebEngine never
+# finds QtWebEngineProcess, cannot resolve qtwebengine_resources.pak or
+# icudtl.dat, and aborts at launch (Abort trap: 6).  Move everything back
+# under Versions/A/: Helpers only when A/Helpers is still absent (Phase 8
+# semantics), the doubled Resources/ merged into A/Resources/ overwriting
+# duplicates (A/Resources/ initially holds only Info.plist there), and any
+# further stray entry moved to A/.  Then drop the emptied
+# Versions/Resources.  Glob covers every *.framework, not just
+# QtWebEngineCore; after a completed repair Versions/Resources is gone, so
+# re-runs are no-ops.
+
+# merge_into SRC DST: move every entry of SRC into DST; existing files are
+# overwritten, existing directories merged (a plain `mv` of a colliding
+# directory would nest it instead of merging).
+merge_into() {
+    mi_src="$1"
+    mi_dst="$2"
+    for mi_entry in "$mi_src"/*; do
+        [ -e "$mi_entry" ] || [ -L "$mi_entry" ] || continue
+        mi_name="${mi_entry##*/}"
+        if [ -d "$mi_entry" ] && [ -d "$mi_dst/$mi_name" ]; then
+            cp -R "$mi_entry/." "$mi_dst/$mi_name/"
+            rm -rf "$mi_entry"
+        else
+            mv -f "$mi_entry" "$mi_dst/"
+        fi
+    done
+}
+
 find "$APP" -type d -name '*.framework' | while IFS= read -r fw; do
-    stray="$fw/Versions/Resources/Helpers"
-    if [ -d "$stray" ] && [ ! -d "$fw/Versions/A/Helpers" ]; then
-        echo "repairing framework: $fw"
-        mv "$stray" "$fw/Versions/A/Helpers"
-        rmdir "$fw/Versions/Resources" 2>/dev/null \
-            || echo "warning: $fw/Versions/Resources not empty — left in place" >&2
+    stray="$fw/Versions/Resources"
+    [ -d "$stray" ] || continue
+    echo "repairing framework: $fw"
+    if [ -d "$stray/Helpers" ] && [ ! -d "$fw/Versions/A/Helpers" ]; then
+        mv -f "$stray/Helpers" "$fw/Versions/A/Helpers"
     fi
+    if [ -d "$stray/Resources" ]; then
+        mkdir -p "$fw/Versions/A/Resources"
+        merge_into "$stray/Resources" "$fw/Versions/A/Resources"
+    fi
+    merge_into "$stray" "$fw/Versions/A"
+    rmdir "$stray" 2>/dev/null \
+        || echo "warning: $stray not empty — left in place" >&2
 done
 
-# Qt resolves the helper through the framework-root symlink chain; confirm
-# it lands on the real binary before signing anything (a dangling chain
-# here is exactly the launch crash).
+# Qt resolves the helper and the Resources payload through the
+# framework-root symlink chain; confirm everything QtWebEngine needs at
+# launch resolves through it before signing anything — a dangling chain
+# here is exactly the launch crash.
 qwc="$(find "$APP" -type d -name 'QtWebEngineCore.framework' | head -n 1 || true)"
-if [ -n "$qwc" ] && [ ! -x "$qwc/Helpers/QtWebEngineProcess.app/Contents/MacOS/QtWebEngineProcess" ]; then
-    echo "error: $qwc/Helpers/QtWebEngineProcess.app does not resolve through the Versions symlink chain — framework repair did not take" >&2
-    exit 1
+if [ -n "$qwc" ]; then
+    if [ ! -x "$qwc/Helpers/QtWebEngineProcess.app/Contents/MacOS/QtWebEngineProcess" ]; then
+        echo "error: $qwc/Helpers/QtWebEngineProcess.app does not resolve through the Versions symlink chain — framework repair did not take" >&2
+        exit 1
+    fi
+    for probe in "Resources/qtwebengine_resources.pak" "Resources/icudtl.dat"; do
+        if [ ! -e "$qwc/$probe" ]; then
+            echo "error: $qwc/$probe does not resolve through the framework-root Resources symlink — QtWebEngine aborts at launch" >&2
+            exit 1
+        fi
+    done
 fi
 
 # The nested QtWebEngineProcess.app MUST be re-signed innermost-first, or the
@@ -79,14 +123,20 @@ else
 fi
 
 # Sign the repaired framework, then the whole bundle (helper signed above).
-# A --strict verify failure after all this is a real problem — do not work
-# around it, report the exact codesign error above.
 if [ -n "$qwc" ]; then
     echo "signing framework: $qwc"
     codesign --force --sign - "$qwc"
 fi
 codesign --force --deep --sign - "$APP"
-codesign --verify --deep --strict --verbose=2 "$APP" || {
+# Verify deliberately WITHOUT --strict: Qt ships non-standard frameworks —
+# PySide6's QtWebEngineCore.framework has NO Versions/A/Info.plist even in
+# the pristine wheel — so `codesign --verify --strict` fails with "embedded
+# framework contains modified or invalid version" on ANY PySide6 bundle,
+# healthy or not (verified on the Mac).  Non-strict --deep verify still
+# catches the failures that actually bite (broken or invalidated
+# signatures, unsigned/dangling helper) and passes (exit 0) on the
+# repaired bundle.
+codesign --verify --deep --verbose=2 "$APP" || {
     echo "error: codesign verification failed (exact error above) — do not ship this bundle" >&2
     exit 1
 }

@@ -373,8 +373,9 @@ showing an error tab).
 ## 9. macOS packaging (personal use)
 
 - `build/mdview.spec` (PyInstaller): onedir app bundle, produced at
-  `dist/MDView/MDView.app` (the BUNDLE nests inside the COLLECT directory —
-  `make-app.sh` signs and reports that exact path), pulling `src/mdview` with
+  `dist/MDView.app` (PyInstaller 6.x writes the BUNDLE at the top level,
+  *not* inside the sibling `dist/MDView/` COLLECT directory — that dir is
+  duplicated weight we neither sign nor ship), pulling `src/mdview` with
   its `static/` + `palettes/` datas, the **maintained PySide6 QtWebEngine
   hooks** plus belt-and-braces `hiddenimports` for
   `PySide6.QtWebEngineWidgets`/`QtWebEngineCore`, and an embedded
@@ -387,10 +388,24 @@ showing an error tab).
   the main window exists (`set_open_handler`). This is the single most
   load-bearing macOS detail in the project.
 - Ad-hoc signing after build (`build/make-app.sh`, POSIX `sh` + `set -eu`,
-  idempotent re-runs): re-sign the nested `QtWebEngineProcess.app` *first*
-  with its inherited entitlements, then the outer bundle,
-  `codesign --force --sign -`. Skipping the nested helper is the classic
-  cause of "silent white window" on arm64.
+  idempotent re-runs). PyInstaller's framework copy-out dumps Qt's payload
+  under `<framework>/Versions/Resources/` — the `QtWebEngineProcess.app`
+  helper tree *and* the whole framework Resources payload under a doubled
+  `Resources/Resources/` (`.pak`s, `icudtl.dat`, `qtwebengine_locales/`,
+  V8 snapshots), which dangles the framework-root `Helpers`/`Resources`
+  symlinks and aborts QtWebEngine at launch — so the script first merges
+  that payload into `<framework>/Versions/A/` for every `*.framework`, then
+  hard-fails unless `Helpers/QtWebEngineProcess.app/…/QtWebEngineProcess`,
+  `Resources/qtwebengine_resources.pak` and `Resources/icudtl.dat` resolve
+  through the framework-root symlinks. Only then sign: the nested
+  `QtWebEngineProcess.app` *first* with its inherited entitlements, then
+  the repaired framework, then the outer bundle, `codesign --force --sign
+  -`. Skipping the nested helper is the classic cause of "silent white
+  window" on arm64. Verification is `codesign --verify --deep --verbose=2`
+  **without `--strict`**: PySide6 frameworks are non-standard —
+  `QtWebEngineCore.framework` has no `Versions/A/Info.plist` even in the
+  pristine wheel — so `--strict` fails ("embedded framework contains
+  modified or invalid version") on *any* PySide6 bundle, healthy or not.
 - Vendored assets (KaTeX/mermaid) are deliberately **not frozen into the
   bundle**: there is one on-disk location, the data-dir vendor tree
   (`app_dir(AppDir.VENDOR)` → `~/Library/Application Support/MDView/vendor`),

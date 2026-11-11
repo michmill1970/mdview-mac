@@ -1,9 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for MDView.app (personal use, ad-hoc signed).
 
-Run via ``build/make-app.sh`` (which also handles the mandatory nested
-``QtWebEngineProcess`` re-signing); it produces ``dist/MDView/MDView.app``
-(onedir BUNDLE nests the .app inside the COLLECT directory).
+Run via ``build/make-app.sh`` (which also repairs PyInstaller's mangled
+QtWebEngineCore framework layout and handles the mandatory nested
+``QtWebEngineProcess`` re-signing); it produces ``dist/MDView.app``
+(PyInstaller 6.x writes the onedir BUNDLE at the top level, NOT inside the
+sibling ``dist/MDView/`` COLLECT directory — that dir is neither signed
+nor shipped).
 
 Vendored KaTeX/Mermaid are deliberately **not** frozen into the bundle: they
 are fetched once by ``mdview fetch-assets`` into the writable user data dir
