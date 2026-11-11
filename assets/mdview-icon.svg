@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a3550"/>
+      <stop offset="0.55" stop-color="#161e2e"/>
+      <stop offset="1" stop-color="#0b101c"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.28" cy="0.18" r="0.95">
+      <stop offset="0" stop-color="#58a6ff" stop-opacity="0.16"/>
+      <stop offset="0.5" stop-color="#58a6ff" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#58a6ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2536"/>
+      <stop offset="1" stop-color="#0e1522"/>
+    </linearGradient>
+    <filter id="cardShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="18" stdDeviation="26" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+    <filter id="softBlur" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+  </defs>
+
+  <!-- squircle body -->
+  <rect x="112" y="112" width="800" height="800" rx="180" fill="url(#bg)"/>
+  <rect x="112" y="112" width="800" height="800" rx="180" fill="url(#glow)"/>
+  <rect x="112" y="112" width="800" height="800" rx="180" fill="url(#glass)"/>
+  <rect x="112.5" y="112.5" width="799" height="799" rx="179.5" fill="none" stroke="#ffffff" stroke-opacity="0.10"/>
+
+  <!-- viewer window card -->
+  <g filter="url(#cardShadow)">
+    <rect x="240" y="264" width="544" height="496" rx="44" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.16"/>
+  </g>
+  <line x1="240" y1="352" x2="784" y2="352" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+  <circle cx="290" cy="308" r="13" fill="#ff5f57"/>
+  <circle cx="331" cy="308" r="13" fill="#febc2e"/>
+  <circle cx="372" cy="308" r="13" fill="#28c840"/>
+
+  <!-- Markdown mark: M + down chevron, co-baselined (blurred underlay + crisp strokes) -->
+  <g stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.32" filter="url(#softBlur)">
+    <path d="M 348 624 L 348 476 L 444 562 L 540 476 L 540 624" stroke="#f2f6fc" stroke-width="36"/>
+    <path d="M 580 552 L 640 622 L 700 552" stroke="#58a6ff" stroke-width="36"/>
+  </g>
+  <g stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 348 624 L 348 476 L 444 562 L 540 476 L 540 624" stroke="#f2f6fc" stroke-width="36"/>
+    <path d="M 580 552 L 640 622 L 700 552" stroke="#58a6ff" stroke-width="36"/>
+  </g>
+</svg>

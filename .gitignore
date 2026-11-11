@@ -13,5 +13,9 @@ dist/
 # PyInstaller intermediates (kept out of the tracked build/ dir by make-app.sh)
 .build-work/
 
+# Generated app icon (build/make-app.sh regenerates both from assets/icons/iconset)
+/build/MDView.icns
+/build/.iconset/
+
 # macOS
 .DS_Store

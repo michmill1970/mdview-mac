@@ -434,6 +434,31 @@ showing an error tab).
   load-bearing macOS detail in the project. Dropping a file on the **Dock
   icon** posts the same event, so Dock drops, double-click and in-window
   drags (§7) are three doors to one `open_paths()` call.
+- App icon (Phase 11): `assets/mdview-icon.svg` (1024px) is the source of
+  truth and `assets/icons/iconset/` holds its 10 rendered, iconutil-named PNGs
+  (transparent squircle corners). Both are committed — rendering the SVG's
+  `feDropShadow`/`feGaussianBlur` filters needs a renderer the Linux dev box
+  doesn't have — so the artefact that *is* generated per build is
+  `build/MDView.icns` (gitignored), by `iconutil -c icns` in `make-app.sh`,
+  before PyInstaller. Two traps, both handled: **iconutil validates the input
+  directory's own name** — Apple requires the `.iconset` extension, and a
+  suffix-less folder is the standard cause of the cryptic `error: Invalid
+  Iconset` — so `assets/icons/iconset` is staged into
+  `build/.iconset/MDView.iconset` and *that* is what iconutil is pointed at;
+  and **`BUNDLE(icon=...)` resolves a relative path against the spec file's
+  directory** (read out of PyInstaller 6.22.3,
+  `building/osx.py`: `os.path.join(CONF['specpath'], self.icon)`), so the spec
+  passes an absolute path — the literal `build/MDView.icns` would look in
+  `build/build/`. BUNDLE then copies the file to `Contents/Resources/` and
+  defaults `CFBundleIconFile` to its basename; the spec states that key
+  explicitly from the same constant, and `make-app.sh`'s `verify_icon` gate
+  hard-fails unless `Contents/Resources/MDView.icns` exists, `plutil -extract
+  CFBundleIconFile raw` names it, the value resolves to that file (with or
+  without the extension), and the two files are byte-identical — a wrong icon
+  never breaks a launch, it just silently shows the generic one.
+  `tests/test_app_icon.py` covers the artwork, the wiring and the gate logic
+  itself (real `verify_icon` shell, `plutil` shimmed with `plistlib`) with no
+  macOS dependency.
 - Ad-hoc signing after build (`build/make-app.sh`, POSIX `sh` + `set -eu`,
   idempotent re-runs). PyInstaller's framework copy-out dumps Qt's payload
   under `<framework>/Versions/Resources/` — the `QtWebEngineProcess.app`
@@ -483,6 +508,13 @@ Three rings, mirrored by pytest markers (`gui`, `webengine`) and CI selection:
    relative image; live font + palette changes without reload; the offline
    contract; zero `Uncaught`/`Refused to` page errors; a screenshot with real
    pixels; and reload-after-external-edit.
+
+A fourth, smaller ring arrived with Phase 11: **build-asset contracts**
+(`tests/test_app_icon.py`) — the committed icon artwork, the icns/
+`CFBundleIconFile` wiring in `build/mdview.spec` + `build/make-app.sh`, and the
+icon gate's own shell logic, re-run against a synthetic bundle with `plutil`
+(the gate's only macOS-only command) shimmed by `plistlib`. No Qt, no macOS, no
+`iconutil`.
 
 Verified platform quirks the suite encodes (each discovered live, all
 reproducible in this container): scheme handlers see raw percent-encoded URLs

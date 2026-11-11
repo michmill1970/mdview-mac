@@ -1,11 +1,12 @@
 #!/bin/sh
 # Build MDView.app for personal use — run on an Apple-silicon Mac.
 #
-#   ./build/make-app.sh      # build + framework repair + ad-hoc sign + verify
+#   ./build/make-app.sh      # icon + build + framework repair + ad-hoc sign + verify
 #
-# Re-running is safe: PyInstaller runs with --clean --noconfirm, the
-# framework repair below is guarded (no-op once applied), and the signing
-# steps are idempotent (codesign --force replaces old signatures).
+# Re-running is safe: the icns is regenerated from the committed iconset on
+# every run, PyInstaller runs with --clean --noconfirm, the framework repair
+# below is guarded (no-op once applied), and the signing steps are idempotent
+# (codesign --force replaces old signatures).
 #
 # Vendored KaTeX/Mermaid are deliberately NOT frozen into the bundle: they
 # live in the user data dir (~/Library/Application Support/MDView/vendor)
@@ -19,6 +20,58 @@ set -eu
 cd "$(dirname "$0")/.."
 
 command -v uv >/dev/null || { echo "error: install uv first (https://docs.astral.sh/uv/)" >&2; exit 1; }
+
+# --- App icon (iconutil -> build/MDView.icns) ---------------------------------
+# assets/mdview-icon.svg (1024px) is the source of truth; assets/icons/iconset/
+# holds the 10 rendered, iconutil-named PNGs (transparent squircle corners).
+# Both are committed: rendering the SVG's filters needs a renderer this Linux
+# container does not have, so the icns — not the artwork — is the build artefact.
+#
+# iconutil insists the input DIRECTORY itself carries the `.iconset` suffix:
+# pointed at assets/icons/iconset it aborts with the useless
+# "<dir>:error: Invalid Iconset" — Apple's iconset docs require the extension,
+# and that exact error is the standard symptom of a suffix-less folder.  So the
+# 10 PNGs are staged into a `.iconset`-named copy first, which also guarantees
+# no stray file (e.g. .DS_Store) enters the icon set.
+ICONSET_SRC="assets/icons/iconset"
+ICNS="build/MDView.icns"
+ICONSET_STAGE="build/.iconset/MDView.iconset" # gitignored staging dir
+
+# macOS-only tool: this script is macOS-only, so a missing iconutil is a hard
+# environment error, never something to work around.
+command -v iconutil >/dev/null 2>&1 || {
+    echo "error: iconutil not found — it ships with macOS; run this script on a Mac" >&2
+    exit 1
+}
+[ -d "$ICONSET_SRC" ] || {
+    echo "error: $ICONSET_SRC missing — the committed iconset is the icon's only source" >&2
+    exit 1
+}
+# iconutil's own failure text is just "Failed to generate ICNS", so name the
+# missing entries here instead (all 10 are required for a complete set).
+for icon_name in 16x16 16x16@2x 32x32 32x32@2x 128x128 128x128@2x 256x256 256x256@2x \
+    512x512 512x512@2x; do
+    if [ ! -f "$ICONSET_SRC/icon_$icon_name.png" ]; then
+        echo "error: $ICONSET_SRC/icon_$icon_name.png missing — iconset is incomplete" >&2
+        exit 1
+    fi
+done
+
+rm -rf build/.iconset
+mkdir -p "$ICONSET_STAGE"
+cp "$ICONSET_SRC"/icon_*.png "$ICONSET_STAGE"/
+rm -f "$ICNS"
+iconutil -c icns "$ICONSET_STAGE" -o "$ICNS" || {
+    echo "error: iconutil -c icns $ICONSET_STAGE -o $ICNS failed" >&2
+    exit 1
+}
+# Fail hard now rather than inside PyInstaller's spec execution (where the
+# error surfaces as "Icon input file ... not found" after minutes of analysis).
+if [ ! -s "$ICNS" ]; then
+    echo "error: iconutil produced no $ICNS" >&2
+    exit 1
+fi
+echo "icon: $ICNS ($(wc -c <"$ICNS" | tr -d ' ') bytes)"
 
 # --workpath keeps PyInstaller's intermediates out of the tracked build/ dir.
 uv run --with pyinstaller pyinstaller \
@@ -109,6 +162,66 @@ if [ -n "$qwc" ]; then
         fi
     done
 fi
+
+# --- Post-build gate: the icon is really in the bundle -----------------------
+# PyInstaller copies BUNDLE(icon=...) to Contents/Resources/<basename> and
+# writes CFBundleIconFile with that same basename (PyInstaller 6.22.3,
+# building/osx.py).  Assert both, and that the key resolves to an actual file,
+# because the failure mode is silent: the bundle launches perfectly while
+# Finder/Dock keep showing the generic app icon.  Checking before signing also
+# keeps a broken icon from wasting a `codesign --deep` pass.
+#
+# The gate is a function so tests/test_app_icon.py can run exactly this shell
+# logic on Linux/macOS CI against a synthetic bundle, with only `plutil`
+# shimmed (the one macOS-only command in it).
+verify_icon() {
+    vi_app="$1"
+    vi_res="$vi_app/Contents/Resources"
+    vi_plist="$vi_app/Contents/Info.plist"
+
+    if [ ! -f "$vi_res/MDView.icns" ]; then
+        echo "error: $vi_res/MDView.icns missing — BUNDLE(icon=...) did not install the icns" >&2
+        return 1
+    fi
+    if [ ! -f "$vi_plist" ]; then
+        echo "error: $vi_plist missing — cannot read CFBundleIconFile" >&2
+        return 1
+    fi
+    command -v plutil >/dev/null 2>&1 || {
+        echo "error: plutil not found — it ships with macOS; cannot verify CFBundleIconFile" >&2
+        return 1
+    }
+    # `plutil -extract ... raw` exits non-zero when the key is absent, and
+    # prints the reason itself — do not swallow stderr, it is the diagnosis.
+    vi_key="$(plutil -extract CFBundleIconFile raw -o - "$vi_plist")" || {
+        echo "error: $vi_plist has no CFBundleIconFile — Launch Services will not use the icns" >&2
+        return 1
+    }
+    if [ -z "$vi_key" ]; then
+        echo "error: CFBundleIconFile is empty in $vi_plist" >&2
+        return 1
+    fi
+    # macOS accepts the value with or without the extension; resolve whichever
+    # form the plist actually uses.
+    case "$vi_key" in
+        *.icns) vi_file="$vi_res/$vi_key" ;;
+        *) vi_file="$vi_res/$vi_key.icns" ;;
+    esac
+    if [ ! -f "$vi_file" ]; then
+        echo "error: CFBundleIconFile=$vi_key does not resolve to a file under $vi_res" >&2
+        return 1
+    fi
+    # Byte-identical to the icns this run generated: rules out a stale icon
+    # surviving from an earlier build (PyInstaller copies the file unchanged).
+    if ! cmp -s "$ICNS" "$vi_file"; then
+        echo "error: $vi_file differs from the freshly generated $ICNS" >&2
+        return 1
+    fi
+    echo "icon gate: $vi_app CFBundleIconFile=$vi_key -> $vi_file" \
+        "$(wc -c <"$vi_file" | tr -d ' ') bytes (identical to $ICNS)"
+}
+
+verify_icon "$APP"
 
 # The nested QtWebEngineProcess.app MUST be re-signed innermost-first, or the
 # outer ad-hoc signature invalidates the helper and the window renders blank

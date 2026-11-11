@@ -30,7 +30,7 @@ this itself, but for `uv run mdview` manually: `QT_QPA_PLATFORM=offscreen`.
 ## Quality gates
 
 ```sh
-uv run pytest                # everything (214 tests, incl. live QtWebEngine)
+uv run pytest                # everything (264 tests, incl. live QtWebEngine)
 uv run pytest -m "not gui"   # pure core + render layer, no Qt widgets
 uv run ruff check .          # lint
 uv run ruff format --check . # format
@@ -56,6 +56,13 @@ open dist/MDView.app examples/demo.md
 Finder double-click works after one launch. It is **ad-hoc signed** (`-`),
 which is fine on your own machine; it is not notarised and must not be
 distributed.
+
+The icon is built in too: `make-app.sh` compiles the committed
+`assets/icons/iconset` PNGs (master: `assets/mdview-icon.svg`) into
+`build/MDView.icns` with `iconutil` before PyInstaller, then fails the build
+unless `Contents/Resources/MDView.icns` exists and `Info.plist`'s
+`CFBundleIconFile` resolves to it — a wrong icon never breaks a launch, it
+just silently shows the generic one.
 
 ## Where things live
 
