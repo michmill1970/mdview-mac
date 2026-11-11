@@ -1,0 +1,33 @@
+{
+  "format": "mdview-palette-1",
+  "id": "github-light",
+  "name": "GitHub Light",
+  "appearance": "light",
+  "description": "Neutral light theme based on GitHub's default light palette. The default for light mode.",
+  "base_font_size_px": 16,
+  "colors": {
+    "background": "#ffffff",
+    "surface": "#f6f8fa",
+    "text": "#1f2328",
+    "muted_text": "#656d76",
+    "heading": "#0d1117",
+    "link": "#0969da",
+    "link_hover": "#0550ae",
+    "accent": "#0969da",
+    "border": "#d1d9e0",
+    "selection": "#0969da33",
+    "selection_text": "#1f2328",
+    "code_bg": "#f6f8fa",
+    "code_text": "#1f2328",
+    "code_border": "#d1d9e0",
+    "syntax_keyword": "#cf222e",
+    "syntax_string": "#0a3069",
+    "syntax_comment": "#6e7781",
+    "syntax_number": "#0550ae",
+    "syntax_function": "#8250df",
+    "syntax_type": "#953800",
+    "syntax_operator": "#0550ae",
+    "syntax_invalid": "#cf222e",
+    "scrollbar": "#8891a0"
+  }
+}

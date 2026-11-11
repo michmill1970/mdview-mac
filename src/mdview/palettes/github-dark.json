@@ -1,0 +1,33 @@
+{
+  "format": "mdview-palette-1",
+  "id": "github-dark",
+  "name": "GitHub Dark",
+  "appearance": "dark",
+  "description": "Dark theme based on GitHub's dark palette. The default for dark mode.",
+  "base_font_size_px": 16,
+  "colors": {
+    "background": "#0d1117",
+    "surface": "#151b23",
+    "text": "#e6edf3",
+    "muted_text": "#8d96a0",
+    "heading": "#f0f6fc",
+    "link": "#4493f8",
+    "link_hover": "#70b0ff",
+    "accent": "#2f81f7",
+    "border": "#3d444d",
+    "selection": "#3392ff40",
+    "selection_text": "#e6edf3",
+    "code_bg": "#151b23",
+    "code_text": "#e6edf3",
+    "code_border": "#3d444d",
+    "syntax_keyword": "#ff7b72",
+    "syntax_string": "#a5d6ff",
+    "syntax_comment": "#8d96a0",
+    "syntax_number": "#79c0ff",
+    "syntax_function": "#d2a8ff",
+    "syntax_type": "#ffa657",
+    "syntax_operator": "#ff7b72",
+    "syntax_invalid": "#f85149",
+    "scrollbar": "#6e7681"
+  }
+}

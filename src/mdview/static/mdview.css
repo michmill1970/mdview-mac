@@ -1,0 +1,228 @@
+/* mdview base stylesheet.
+ *
+ * Contract with the Python side: this file references ONLY --mdv-* custom
+ * properties (plus a couple of layout constants). Palette switching is
+ * therefore just a replacement of the inline :root block, never a re-render.
+ */
+
+html {
+  scroll-behavior: var(--mdv-scroll-behavior, smooth);
+  background: var(--mdv-background);
+}
+
+body.md-body {
+  margin: 0;
+  background: var(--mdv-background);
+  color: var(--mdv-text);
+  font: var(--mdv-font-size) / var(--mdv-line-height)
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.md-content {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: calc(var(--mdv-font-size) * 1.5) calc(var(--mdv-font-size) * 1.25)
+    calc(var(--mdv-font-size) * 4);
+  overflow-wrap: break-word;
+}
+
+::selection {
+  background: var(--mdv-selection);
+  color: var(--mdv-selection-text);
+}
+
+/* ------------------------------------------------------------- headings -- */
+.md-content h1,
+.md-content h2,
+.md-content h3,
+.md-content h4,
+.md-content h5,
+.md-content h6 {
+  color: var(--mdv-heading);
+  line-height: 1.25;
+  margin: 1.6em 0 0.6em;
+  font-weight: 600;
+}
+
+.md-content h1 {
+  font-size: 2em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--mdv-border);
+}
+
+.md-content h2 {
+  font-size: 1.5em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--mdv-border);
+}
+
+.md-content h3 { font-size: 1.25em; }
+.md-content h4 { font-size: 1.1em; }
+.md-content h5 { font-size: 1em; }
+.md-content h6 { font-size: 0.9em; color: var(--mdv-muted-text); }
+
+/* ----------------------------------------------------------------- text -- */
+.md-content p { margin: 0 0 1em; }
+
+.md-content a {
+  color: var(--mdv-link);
+  text-decoration: none;
+}
+
+.md-content a:hover {
+  color: var(--mdv-link-hover);
+  text-decoration: underline;
+}
+
+.md-content strong { color: var(--mdv-heading); }
+
+.md-content hr {
+  height: 1px;
+  border: 0;
+  background: var(--mdv-border);
+  margin: 2em 0;
+}
+
+.md-content blockquote {
+  margin: 0 0 1em;
+  padding: 0.1em 1em;
+  color: var(--mdv-muted-text);
+  border-left: 0.25em solid var(--mdv-border);
+}
+
+/* ------------------------------------------------------------ lists/tasks -- */
+.md-content ul,
+.md-content ol {
+  margin: 0 0 1em;
+  padding-left: 1.6em;
+}
+
+.md-content li { margin: 0.2em 0; }
+
+.md-content li.md-task-item,
+.md-content li.task-list-item {
+  list-style: none;
+  margin-left: -1.4em;
+}
+
+.md-content input[type="checkbox"] {
+  accent-color: var(--mdv-accent);
+  margin-right: 0.5em;
+  pointer-events: none; /* viewer: task boxes are read-only */
+}
+
+/* ---------------------------------------------------------------- tables -- */
+.md-content table {
+  border-collapse: collapse;
+  margin: 0 0 1em;
+  display: block;
+  overflow-x: auto;
+}
+
+.md-content th,
+.md-content td {
+  border: 1px solid var(--mdv-border);
+  padding: 0.4em 0.8em;
+}
+
+.md-content th {
+  background: var(--mdv-surface);
+  color: var(--mdv-heading);
+  font-weight: 600;
+}
+
+.md-content tr:nth-child(2n) td { background: color-mix(in srgb, var(--mdv-surface) 45%, transparent); }
+
+/* ------------------------------------------------------------------ code -- */
+.md-content code {
+  font-family: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  font-size: var(--mdv-code-size);
+}
+
+.md-content :not(pre) > code {
+  background: var(--mdv-code-bg);
+  color: var(--mdv-code-text);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  border: 1px solid var(--mdv-code-border);
+}
+
+.md-code {
+  margin: 0 0 1em;
+  padding: 0.9em 1.1em;
+  border: 1px solid var(--mdv-code-border);
+  border-radius: 8px;
+  overflow-x: auto;
+  /* Pygments token colours are generated from the palette at render time. */
+}
+
+.md-code pre {
+  margin: 0;
+  overflow: visible;
+}
+
+.md-content pre {
+  margin: 0 0 1em;
+  overflow-x: auto;
+}
+
+.md-content kbd {
+  font: 0.85em ui-monospace, monospace;
+  border: 1px solid var(--mdv-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  background: var(--mdv-surface);
+}
+
+/* -------------------------------------------------- images / math / gfx -- */
+.md-content img {
+  max-width: 100%;
+  height: auto;
+}
+
+.md-math { white-space: nowrap; }
+.md-math-block {
+  margin: 1em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.katex { font-size: 1.05em; }
+
+.md-mermaid {
+  margin: 1.2em 0;
+  text-align: center;
+  color: var(--mdv-muted-text);
+  background: transparent;
+}
+
+.md-mermaid[data-mdview-state="pending"] {
+  font: var(--mdv-code-size) ui-monospace, monospace;
+  white-space: pre-wrap;
+  text-align: left;
+}
+
+.md-footnotes {
+  margin-top: 3em;
+  padding-top: 1em;
+  border-top: 1px solid var(--mdv-border);
+  font-size: 0.9em;
+  color: var(--mdv-muted-text);
+}
+
+/* --------------------------------------------------------- scrollbars -- */
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--mdv-scrollbar) 45%, transparent);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}

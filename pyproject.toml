@@ -1,0 +1,83 @@
+[project]
+name = "mdview"
+version = "0.1.0"
+description = "Offline Markdown viewer for macOS with tabs, palettes, KaTeX and Mermaid."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "MDView project" }]
+keywords = ["markdown", "viewer", "macos", "qt"]
+
+# Runtime dependencies. Deliberately tiny -- mdview is a viewer, not an IDE.
+# The three pure-Python ones implement the GUI-free core (see DESIGN.md,
+# "Clean separation"); PySide6 is used only by mdview.viewer.* and by the CLI
+# entrypoint when it starts the app. `tests/test_architecture.py` enforces that
+# mdview.core / mdview.render never import Qt, so the core stays unit-testable
+# on a machine without Qt installed.
+dependencies = [
+    "markdown-it-py==4.3.0",
+    "mdit-py-plugins==0.7.0",
+    "pygments==2.21.0",
+    "pyside6==6.12.0",
+]
+
+[project.optional-dependencies]
+# Empty on purpose: nothing here is optional at runtime. Build tooling lives in
+# the `dev` group below so that a plain `uv sync` gives a complete dev box.
+
+[project.scripts]
+mdview = "mdview.__main__:main"
+
+[project.urls]
+Homepage = "https://example.invalid/mdview"
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "pytest-qt==4.5.0",
+    "ruff==0.17.4",
+    "pyinstaller==6.22.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "gui: tests that construct Qt widgets (run headless via QT_QPA_PLATFORM=offscreen)",
+    "webengine: tests that need a live QtWebEngine/Chromium render process",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "W",
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "C4",  # comprehensions
+    "SIM", # simplify
+    "RUF", # ruff-specific
+    "ANN", # full type hints are a project requirement
+    "TID", # tidy imports
+    "PT",  # pytest style
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mdview"]
+
+[tool.uv.build-backend]
+module-name = "mdview"
+module-root = "src"
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"

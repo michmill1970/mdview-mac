@@ -1,0 +1,100 @@
+"""Page assembly: CSP, URLs, config JSON, CSS plumbing -- and the asset gate."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from mdview.core.errors import AssetError
+from mdview.core.palette import Palette
+from mdview.render.page import PageOptions, base_url_for, render_page
+
+
+@pytest.fixture
+def options(dark_palette: Palette, demo_file: Path) -> PageOptions:
+    return PageOptions(
+        palette=dark_palette,
+        font_size_px=17,
+        appearance="dark",
+        title="Demo & <Co>",
+        document_dir=demo_file.parent,
+        page_id="t1",
+        skip_asset_check=True,
+    )
+
+
+def test_asset_gate_requires_vendored_files(demo_file: Path, dark_palette: Palette) -> None:
+    with pytest.raises(AssetError, match="fetch-assets"):
+        render_page("# x", PageOptions(palette=dark_palette, document_dir=demo_file.parent))
+
+
+def test_page_structure_and_escaping(dark_palette: Palette, options: PageOptions) -> None:
+    page = render_page("# Hi $x^2$\n\n```mermaid\nA-->B\n```\n", options)
+    html = page.html
+    assert "<!DOCTYPE html>" in html
+    assert "<title>Demo &amp; &lt;Co&gt;</title>" in html
+    assert 'data-math="1"' in html and 'data-mermaid="1"' in html
+    assert '<style id="mdview-palette-style">' in html
+    assert "--mdv-font-size: 17px" in html
+    assert "color-scheme: dark" in html
+    assert page.used_math and page.used_mermaid
+    assert page.languages == ("mermaid",) or page.languages == ()
+
+
+def test_math_script_only_when_needed(dark_palette: Palette) -> None:
+    opts = PageOptions(palette=dark_palette, skip_asset_check=True)
+    plain = render_page("no math here", opts)
+    mathy = render_page("$x$", opts)
+    assert "katex.min.js" not in plain.html
+    assert "katex.min.js" in mathy.html
+    assert "mermaid" not in plain.html.split("<body")[0]
+
+
+def test_config_json_is_valid_and_decodes(dark_palette: Palette, options: PageOptions) -> None:
+    page = render_page("x", options)
+    start = page.html.index('<script id="mdview-config" type="application/json">')
+    blob = page.html[start:].split(">", 1)[1].split("</script>")[0]
+    config = json.loads(blob.replace("<\\/", "</"))
+    assert config["appearance"] == "dark"
+    assert config["mermaidTheme"] == "dark"
+    assert config["mermaidUrl"].startswith("mdview://assets/mermaid/")
+    assert config["palette"] == "github-dark"
+
+
+def test_content_security_policy_shape(dark_palette: Palette, options: PageOptions) -> None:
+    page = render_page("x", options)
+    tag = page.html.split("<meta http-equiv=\"Content-Security-Policy\"")[1].split(">")[0]
+    csp = tag
+    assert "default-src 'none'" in csp
+    assert "mdview:" in csp
+    assert "unsafe-eval" not in csp
+    assert "https:" not in csp  # offline guarantee at the policy level too
+
+
+def test_relative_images_resolve_via_doc_host(dark_palette: Palette, demo_file: Path) -> None:
+    options = PageOptions(palette=dark_palette, document_dir=demo_file.parent, skip_asset_check=True)
+    base = base_url_for(options)
+    assert base.startswith("mdview://doc/")
+    assert demo_file.parent.name in base  # the directory is in the URL (encoded)
+    page = render_page("![alt](pic.png)", options)
+    assert 'src="pic.png"' in page.html  # relative to <base> -> doc host
+
+
+def test_page_host_fallback_without_document_dir(dark_palette: Palette) -> None:
+    options = PageOptions(palette=dark_palette, page_id="abc", skip_asset_check=True)
+    assert base_url_for(options) == "mdview://page/abc/"
+
+
+def test_for_browser_mode_uses_file_urls(dark_palette: Palette, demo_file: Path) -> None:
+    options = PageOptions(
+        palette=dark_palette,
+        document_dir=demo_file.parent,
+        asset_scheme="file",
+        skip_asset_check=True,
+    )
+    base = base_url_for(options)
+    assert base.startswith("file://") and base.endswith("/")
+    page = render_page("x", options)
+    assert "file://" in page.html and "mdview://" not in page.html

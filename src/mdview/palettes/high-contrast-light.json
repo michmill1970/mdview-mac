@@ -1,0 +1,33 @@
+{
+  "format": "mdview-palette-1",
+  "id": "high-contrast-light",
+  "name": "High Contrast Light",
+  "appearance": "light",
+  "description": "Black-on-white with strong borders and underlined links, for maximum legibility.",
+  "base_font_size_px": 17,
+  "colors": {
+    "background": "#ffffff",
+    "surface": "#f2f2f2",
+    "text": "#000000",
+    "muted_text": "#242424",
+    "heading": "#000000",
+    "link": "#0000ee",
+    "link_hover": "#000099",
+    "accent": "#0000ee",
+    "border": "#000000",
+    "selection": "#0000ee",
+    "selection_text": "#ffffff",
+    "code_bg": "#f2f2f2",
+    "code_text": "#000000",
+    "code_border": "#000000",
+    "syntax_keyword": "#7d007d",
+    "syntax_string": "#0b5c0b",
+    "syntax_comment": "#3a3a3a",
+    "syntax_number": "#000099",
+    "syntax_function": "#0b5c0b",
+    "syntax_type": "#7d007d",
+    "syntax_operator": "#000000",
+    "syntax_invalid": "#990000",
+    "scrollbar": "#4d4d4d"
+  }
+}
