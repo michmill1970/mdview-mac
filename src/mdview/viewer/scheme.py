@@ -25,17 +25,22 @@ from pathlib import Path
 from typing import ClassVar
 from urllib.parse import unquote
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QUrl
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QObject, QUrl
 from PySide6.QtWebEngineCore import (
     QWebEngineUrlRequestInfo,
     QWebEngineUrlRequestInterceptor,
+    QWebEngineUrlRequestJob,
     QWebEngineUrlScheme,
     QWebEngineUrlSchemeHandler,
-    QWebEngineUrlRequestJob,
 )
 
 from mdview.core.paths import AppDir, app_dir, static_dir
-from mdview.render.assets import SCHEME_HOST_ASSETS, SCHEME_HOST_DOC, SCHEME_HOST_PAGE, SCHEME_HOST_STATIC
+from mdview.render.assets import (
+    SCHEME_HOST_ASSETS,
+    SCHEME_HOST_DOC,
+    SCHEME_HOST_PAGE,
+    SCHEME_HOST_STATIC,
+)
 
 SCHEME_NAME = b"mdview"
 
@@ -95,7 +100,8 @@ class PageStore:
 
 def _content_type(path: Path) -> bytes:
     guessed, _ = mimetypes.guess_type(path.name)
-    return (_CONTENT_TYPES.get(path.suffix.lower()) or guessed or "application/octet-stream").encode()
+    mime = _CONTENT_TYPES.get(path.suffix.lower()) or guessed or "application/octet-stream"
+    return mime.encode()
 
 
 def _reply(job: QWebEngineUrlRequestJob, data: bytes, content_type: bytes) -> None:
@@ -106,14 +112,16 @@ def _reply(job: QWebEngineUrlRequestJob, data: bytes, content_type: bytes) -> No
     buffer.open(QIODevice.OpenModeFlag.ReadOnly)
     # Mermaid is imported as a module from a different *host* of the same
     # scheme, so the response has to be CORS-readable.
-    job.setAdditionalResponseHeaders({"Access-Control-Allow-Origin": "*"})
+    job.setAdditionalResponseHeaders({QByteArray(b"Access-Control-Allow-Origin"): QByteArray(b"*")})
     job.reply(content_type, buffer)
 
 
 class MdViewSchemeHandler(QWebEngineUrlSchemeHandler):
     """Serves pages, static files, vendored assets, and document-local files."""
 
-    def __init__(self, document_roots: list[Path] | None = None, parent=None) -> None:
+    def __init__(
+        self, document_roots: list[Path] | None = None, parent: QObject | None = None
+    ) -> None:
         super().__init__(parent)
         self._document_roots: list[Path] = document_roots or []
         self._vendor_root = app_dir(AppDir.VENDOR)
@@ -125,7 +133,7 @@ class MdViewSchemeHandler(QWebEngineUrlSchemeHandler):
         if resolved not in self._document_roots:
             self._document_roots.append(resolved)
 
-    def requestStarted(self, job: QWebEngineUrlRequestJob) -> None:  # noqa: N802
+    def requestStarted(self, job: QWebEngineUrlRequestJob) -> None:
         url = job.requestUrl()
         host = url.host()
         path = url.path().lstrip("/")
@@ -137,27 +145,48 @@ class MdViewSchemeHandler(QWebEngineUrlSchemeHandler):
                     return
                 _reply(job, html.encode("utf-8"), b"text/html; charset=utf-8")
             elif host == SCHEME_HOST_STATIC:
-                self._reply_file(job, self._static_root / path)
+                self._reply_file(job, self._static_root, path)
             elif host == SCHEME_HOST_ASSETS:
-                self._reply_file(job, self._vendor_root / path)
+                self._reply_file(job, self._vendor_root, path)
             elif host == SCHEME_HOST_DOC:
-                self._reply_document_file(job, path)
+                self._reply_document_file(job)
             else:
                 job.fail(QWebEngineUrlRequestJob.Error.RequestDenied)
         except OSError:
             job.fail(QWebEngineUrlRequestJob.Error.RequestFailed)
 
-    def _reply_file(self, job: QWebEngineUrlRequestJob, candidate: Path) -> None:
-        if not candidate.is_file():
+    def _reply_file(self, job: QWebEngineUrlRequestJob, root: Path, relative: str) -> None:
+        # Belt and braces: Chromium strips dot-segments from URLs, but we never
+        # let a ``..`` (or symlink) escape the served directory either way.
+        target = (root / relative).resolve()
+        if not target.is_relative_to(root.resolve()) or not target.is_file():
             job.fail(QWebEngineUrlRequestJob.Error.UrlNotFound)
             return
-        _reply(job, candidate.read_bytes(), _content_type(candidate))
+        _reply(job, target.read_bytes(), _content_type(target))
 
-    def _reply_document_file(self, job: QWebEngineUrlRequestJob, encoded_path: str) -> None:
-        """``doc/<pct-encoded absolute dir>/<relative>`` -> file inside that dir only."""
-        directory, _, relative = unquote(encoded_path).partition("/")
-        root = Path(directory)
-        if not any(root == allowed or root.is_relative_to(allowed) for allowed in self._document_roots):
+    def _reply_document_file(self, job: QWebEngineUrlRequestJob) -> None:
+        """``doc/<pct-encoded absolute dir>/<relative>`` -> file inside that dir only.
+
+        The directory is percent-encoded *including its slashes* (that is what
+        ``base_url_for`` emits), while ``relative`` uses literal slashes.
+        ``QUrl.path()`` decodes both indistinguishably, so we work from
+        ``toEncoded()`` (percent-encoding preserved) and split on the first
+        literal slash.  Qt6 QUrl does *not* strip dot segments either, so the
+        containment check below is load-bearing, not theoretical.
+        """
+        encoded = bytes(job.requestUrl().toEncoded().data())
+        prefix = SCHEME_NAME + b"://" + SCHEME_HOST_DOC.encode() + b"/"
+        if not encoded.startswith(prefix):
+            job.fail(QWebEngineUrlRequestJob.Error.RequestDenied)
+            return
+        encoded_dir, slash, encoded_rel = encoded[len(prefix) :].partition(b"/")
+        if not slash or not encoded_rel:
+            job.fail(QWebEngineUrlRequestJob.Error.UrlNotFound)
+            return
+        root = Path(unquote(encoded_dir.decode("utf-8")))
+        relative = unquote(encoded_rel.decode("utf-8"))
+        allowed_dirs = self._document_roots
+        if not any(root == allowed or root.is_relative_to(allowed) for allowed in allowed_dirs):
             job.fail(QWebEngineUrlRequestJob.Error.RequestDenied)
             return
         target = (root / relative).resolve()
@@ -173,9 +202,18 @@ class OfflineInterceptor(QWebEngineUrlRequestInterceptor):
     The page's CSP already sets ``connect-src 'none'`` and loads nothing remote,
     but a hostile document could still try to make an <img> or CSS request to a
     remote host; this makes offline operation a guarantee rather than a hope.
+
+    ``blocked`` records what was refused (per profile instance) so diagnostics
+    and the smoke tests can assert that nothing off-scheme was even attempted.
     """
 
-    def interceptRequest(self, info: QWebEngineUrlRequestInfo) -> None:  # noqa: N802
-        scheme = bytes(info.requestUrl().scheme().encode()).lower()
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.blocked: list[str] = []
+
+    def interceptRequest(self, info: QWebEngineUrlRequestInfo) -> None:
+        url = info.requestUrl()
+        scheme = bytes(url.scheme().encode()).lower()
         if scheme != SCHEME_NAME:
+            self.blocked.append(url.toString())
             info.block(True)

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Final
 
 from mdview.core.errors import AssetError
-from mdview.render.assets import ASSETS, AssetSpec, LOCKFILE, vendor_dir
+from mdview.render.assets import ASSETS, LOCKFILE, AssetSpec, vendor_dir
 
 __all__ = ["FetchReport", "fetch_assets", "verify_assets"]
 
@@ -52,7 +52,7 @@ def _sha256(data: bytes) -> str:
 
 def _download(url: str) -> bytes:
     try:
-        with urllib.request.urlopen(url, timeout=_TIMEOUT_SECONDS) as response:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=_TIMEOUT_SECONDS) as response:
             return response.read()
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise AssetError(f"could not download {url}: {exc}") from exc

@@ -44,7 +44,7 @@ def capture(widget: QWidget, path: Path | str, *, settle_ms: int = DEFAULT_SETTL
     """
     target = Path(path)
     settle(settle_ms)
-    ok = widget.grab().save(target, "PNG")
+    ok = widget.grab().save(str(target), "PNG")
     if not ok:  # pragma: no cover - only fails on a broken disk
         raise OSError(f"could not write screenshot to {target}")
     return target

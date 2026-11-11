@@ -39,7 +39,8 @@ def test_corrupt_settings_survive_with_a_warning(tmp_path: Path) -> None:
     path.write_text("{ broken", encoding="utf-8")
     loaded, warning = load_settings_or_default(path)
     assert loaded == Settings()
-    assert warning and "settings" in warning.lower()
+    assert warning is not None
+    assert "settings" in warning.lower()
 
 
 def test_settings_normalizes_clamps_and_validates() -> None:
@@ -59,16 +60,22 @@ def test_settings_normalizes_clamps_and_validates() -> None:
 
 def test_font_size_steps_and_clamps() -> None:
     size = FontSize(16)
-    assert size.increase() and size.size_px == 17
-    assert size.increase(step=3) and size.size_px == 20
+    assert size.increase()
+    assert size.size_px == 17
+    assert size.increase(step=3)
+    assert size.size_px == 20
     assert size.percent() == 125
-    assert size.reset() and size.size_px == 16 and size.is_default
+    assert size.reset()
+    assert size.size_px == 16
+    assert size.is_default
     big = FontSize(FONT_SIZE_MAX_PX)
     assert not big.increase()
     tiny = FontSize(FONT_SIZE_MIN_PX)
     assert not tiny.decrease()
-    assert size.set(1000) and size.size_px == FONT_SIZE_MAX_PX  # clamped, not rejected
-    assert size.set(23) and size.size_px == 23
+    assert size.set(1000)  # clamped, not rejected
+    assert size.size_px == FONT_SIZE_MAX_PX
+    assert size.set(23)
+    assert size.size_px == 23
 
 
 def test_font_size_set_unchanged_is_not_a_change() -> None:
@@ -86,8 +93,10 @@ def test_font_css_vars_scale_code_with_body() -> None:
 
 
 def test_is_supported() -> None:
-    assert is_supported("x.md") and is_supported(Path("x.MARKDOWN"))
-    assert not is_supported("x.txt") and not is_supported("x")
+    assert is_supported("x.md")
+    assert is_supported(Path("x.MARKDOWN"))
+    assert not is_supported("x.txt")
+    assert not is_supported("x")
 
 
 def test_document_open_read_title(tmp_path: Path) -> None:
@@ -106,7 +115,7 @@ def test_document_title_falls_back_to_filename(tmp_path: Path) -> None:
 
 
 def test_document_missing_raises(tmp_path: Path) -> None:
-    with pytest.raises(DocumentError, match="[Nn]ot found"):
+    with pytest.raises(DocumentError, match=r"[Nn]ot found"):
         Document.open(tmp_path / "ghost.md")
 
 

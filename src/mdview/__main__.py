@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from mdview import __version__
+from mdview.core.appearance import Appearance
 from mdview.core.errors import MDViewError
 from mdview.core.paths import AppDir, app_dir, builtin_palettes_dir, settings_path
 from mdview.core.settings import Settings, load_settings_or_default
@@ -115,7 +116,7 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     registry = _registry()
     settings = _settings()
-    system = "dark" if (args.palette or "").endswith("-dark") else "light"
+    system: Appearance = "dark" if (args.palette or "").endswith("-dark") else "light"
     override = args.palette
     sel = selection_for(registry, settings, system, override=override)
     appearance = sel.appearance if args.appearance == "auto" else args.appearance
@@ -154,7 +155,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     # Bare `mdview file.md` behaves like `mdview open file.md`.
-    if argv and argv[0] not in {"open", "render", "palettes", "fetch-assets", "assets", "-h", "--help", "--version"} and not argv[0].startswith("-"):
+    known_commands = {"open", "render", "palettes", "fetch-assets", "assets", "-h", "--help"}
+    if argv and argv[0] not in known_commands and not argv[0].startswith("-"):
         argv = ["open", *argv]
     args = parser.parse_args(argv)
 

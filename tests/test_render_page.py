@@ -35,12 +35,14 @@ def test_page_structure_and_escaping(dark_palette: Palette, options: PageOptions
     html = page.html
     assert "<!DOCTYPE html>" in html
     assert "<title>Demo &amp; &lt;Co&gt;</title>" in html
-    assert 'data-math="1"' in html and 'data-mermaid="1"' in html
+    assert 'data-math="1"' in html
+    assert 'data-mermaid="1"' in html
     assert '<style id="mdview-palette-style">' in html
     assert "--mdv-font-size: 17px" in html
     assert "color-scheme: dark" in html
-    assert page.used_math and page.used_mermaid
-    assert page.languages == ("mermaid",) or page.languages == ()
+    assert page.used_math
+    assert page.used_mermaid
+    assert page.languages in {("mermaid",), ()}
 
 
 def test_math_script_only_when_needed(dark_palette: Palette) -> None:
@@ -65,7 +67,7 @@ def test_config_json_is_valid_and_decodes(dark_palette: Palette, options: PageOp
 
 def test_content_security_policy_shape(dark_palette: Palette, options: PageOptions) -> None:
     page = render_page("x", options)
-    tag = page.html.split("<meta http-equiv=\"Content-Security-Policy\"")[1].split(">")[0]
+    tag = page.html.split('<meta http-equiv="Content-Security-Policy"')[1].split(">")[0]
     csp = tag
     assert "default-src 'none'" in csp
     assert "mdview:" in csp
@@ -74,12 +76,16 @@ def test_content_security_policy_shape(dark_palette: Palette, options: PageOptio
 
 
 def test_relative_images_resolve_via_doc_host(dark_palette: Palette, demo_file: Path) -> None:
-    options = PageOptions(palette=dark_palette, document_dir=demo_file.parent, skip_asset_check=True)
+    options = PageOptions(
+        palette=dark_palette, document_dir=demo_file.parent, skip_asset_check=True
+    )
     base = base_url_for(options)
     assert base.startswith("mdview://doc/")
     assert demo_file.parent.name in base  # the directory is in the URL (encoded)
     page = render_page("![alt](pic.png)", options)
-    assert 'src="pic.png"' in page.html  # relative to <base> -> doc host
+    assert f'src="{page.base_url}pic.png"' in page.html  # absolutised to the doc host
+    assert 'src="pic.png"' not in page.html  # never left <base>-relative...
+    assert "<base" not in page.html  # ...and there is no <base> (CSP base-uri 'none')
 
 
 def test_page_host_fallback_without_document_dir(dark_palette: Palette) -> None:
@@ -95,6 +101,8 @@ def test_for_browser_mode_uses_file_urls(dark_palette: Palette, demo_file: Path)
         skip_asset_check=True,
     )
     base = base_url_for(options)
-    assert base.startswith("file://") and base.endswith("/")
+    assert base.startswith("file://")
+    assert base.endswith("/")
     page = render_page("x", options)
-    assert "file://" in page.html and "mdview://" not in page.html
+    assert "file://" in page.html
+    assert "mdview://" not in page.html

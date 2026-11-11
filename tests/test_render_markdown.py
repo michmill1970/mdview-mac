@@ -59,24 +59,29 @@ def test_fences_report_languages(dark_palette: Palette) -> None:
 
 
 def test_raw_html_is_escaped_not_executed(dark_palette: Palette) -> None:
-    body = render_body('<img src=x onerror="alert(1)">\n\n<script>alert(2)</script>\n', dark_palette)
+    source = '<img src=x onerror="alert(1)">\n\n<script>alert(2)</script>\n'
+    body = render_body(source, dark_palette)
     assert "<img" not in body.html
     assert "<script" not in body.html.lower()
     assert "onerror" in body.html  # visible as text, not as an attribute
 
 
 def test_dangerous_link_schemes_are_neutralised(dark_palette: Palette) -> None:
+    # markdown-it-py 4.x refuses to parse javascript:/vbscript: link
+    # destinations at all (they stay escaped text); `_link_open_rule`'s "#"
+    # rewrite is defense-in-depth for links that arrive with a blanked href.
     body = render_body("[x](javascript:alert(1)) [y](JaVaScRiPt:2) [z](vbscript:x)", dark_palette)
+    assert "<a" not in body.html
     assert 'href="javascript' not in body.html.lower()
-    assert body.html.count('href="#"') == 3
 
 
 def test_external_links_are_annotated_for_the_gui(dark_palette: Palette) -> None:
     body = render_body("[site](https://example.com) [mail](mailto:a@example.com)", dark_palette)
     assert 'data-external="1"' in body.html
     assert 'rel="noreferrer noopener"' in body.html
-    mailto = body.html.split('mailto:a@example.com')
-    assert len(mailto) == 2 and "data-external" not in mailto[1][:200]
+    mailto = body.html.split("mailto:a@example.com")
+    assert len(mailto) == 2
+    assert "data-external" not in mailto[1][:200]
 
 
 def test_footnotes(dark_palette: Palette) -> None:

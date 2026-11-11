@@ -63,6 +63,22 @@ graph TD; A[Start] --> B[Done];
 """
 
 
+@pytest.fixture(scope="session", autouse=True)
+def qt_application():
+    """One QApplication for the whole session, *before* pytest-qt asks for one.
+
+    It is the app's own ``MDViewApplication``: pytest-qt reuses an existing
+    ``QApplication`` singleton, and the production bootstrap only reuses that
+    subclass, so both agree on a single instance.  Chromium flags are set by
+    ``prepare_webengine_environment`` (a no-op on macOS).
+    """
+    from mdview.viewer.application import create_application, prepare_webengine_environment
+
+    prepare_webengine_environment()
+    app = create_application(["mdview-pytest"])
+    return app
+
+
 @pytest.fixture(autouse=True)
 def isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Every test gets its own writable app directory (never touches $HOME)."""

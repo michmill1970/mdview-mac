@@ -81,7 +81,7 @@ def resolve_lexer(language: str | None) -> Lexer | None:
         return None
     try:
         lexer = get_lexer_by_name(lang)
-    except Exception:  # noqa: BLE001 - Pygments raises ClassNotFound; a bad fence must not be fatal
+    except Exception:
         return None
     lexer.stripnl = True
     return lexer
@@ -91,7 +91,7 @@ def resolve_lexer(language: str | None) -> Lexer | None:
 def _style_class(colors_key: tuple[tuple[str, str], ...]) -> type[Style]:
     """Build a Pygments style class whose colours come from a palette."""
     colors = dict(colors_key)
-    styles: dict[Token, str] = {
+    styles = {
         Token: f"{colors['code_text']} noinherit",
         Text: colors["code_text"],
         Keyword: colors["syntax_keyword"],

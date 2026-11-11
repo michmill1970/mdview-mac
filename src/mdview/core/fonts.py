@@ -61,7 +61,6 @@ class FontSize:
     def can_decrease(self) -> bool:
         return self.size_px > FONT_SIZE_MIN_PX
 
-    @property
     def percent(self) -> int:
         """Zoom relative to the default size, for the UI control's label."""
         return round(self.size_px / DEFAULT_FONT_SIZE_PX * 100)

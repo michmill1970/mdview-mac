@@ -2,8 +2,9 @@
 //
 // Responsibilities (and nothing else):
 //   1. hydrate math placeholders with the bundled KaTeX,
-//   2. hydrate ```mermaid blocks with the bundled Mermaid (dynamic import, so a
-//      document without diagrams never pays for the 2 MB parser),
+//   2. hydrate ```mermaid blocks with the bundled Mermaid (injected on demand
+//      as a <script>, so a document without diagrams never pays for the 2 MB
+//      parser; the vendored build is the IIFE bundle that sets globalThis),
 //   3. expose window.mdview* helpers the Qt layer calls for *live* font-size and
 //      palette changes, avoiding a reload (which would lose scroll position).
 //
@@ -52,8 +53,17 @@ async function renderMermaid() {
   if (!config.mermaidUrl) return 0;
   let mermaid;
   try {
-    const module = await import(config.mermaidUrl);
-    mermaid = module.default ?? module.mermaid;
+    // The vendored mermaid.min.js is the IIFE build (sets globalThis.mermaid);
+    // a <script> tag loads it under the scheme's CSP without requiring ESM.
+    await new Promise((resolve, reject) => {
+      const tag = document.createElement("script");
+      tag.src = config.mermaidUrl;
+      tag.onload = () => resolve();
+      tag.onerror = () => reject(new Error(`script load failed: ${config.mermaidUrl}`));
+      document.head.append(tag);
+    });
+    mermaid = globalThis.mermaid;
+    if (!mermaid) throw new Error("globalThis.mermaid missing after script load");
   } catch (error) {
     for (const block of blocks) block.dataset.mdviewState = "error";
     console.warn("mdview: mermaid failed to load", error);

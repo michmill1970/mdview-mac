@@ -14,6 +14,7 @@ The result is a self-contained string that references only ``mdview://`` (or
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
@@ -55,7 +56,7 @@ CSP: str = (
     "object-src 'none'"
 )
 
-_TEMPLATE = """<!doctype html>
+_TEMPLATE = """<!DOCTYPE html>
 <html lang="en" data-appearance="{appearance}">
 <head>
 <meta charset="utf-8">
@@ -119,6 +120,7 @@ def render_page(markdown_source: str, options: PageOptions) -> RenderedPage:
         require_vendored()
     body: RenderedBody = render_body(markdown_source, options.palette)
     scheme = options.asset_scheme
+    body_html = _absolutize_images(body.html, options, scheme)
 
     scripts = []
     if body.used_math:
@@ -137,9 +139,14 @@ def render_page(markdown_source: str, options: PageOptions) -> RenderedPage:
         "palette": options.palette.id,
         "smoothScrolling": options.smooth_scrolling,
     }
+    csp_meta = (
+        f'<meta http-equiv="Content-Security-Policy" content="{CSP}">'
+        if scheme == "mdview"
+        else ""  # browser QA mode: a policy naming mdview: would block file: loads
+    )
     html = _TEMPLATE.format(
         appearance=options.appearance,
-        csp=CSP,
+        csp_meta=csp_meta,
         version=__version__,
         title=escape(options.title),
         base_css_url=static_url("mdview.css", scheme=scheme),
@@ -152,7 +159,7 @@ def render_page(markdown_source: str, options: PageOptions) -> RenderedPage:
         ),
         used_math="1" if body.used_math else "0",
         used_mermaid="1" if body.used_mermaid else "0",
-        body=body.html,
+        body=body_html,
         # `<\/` keeps a literal </script> inside the JSON from closing the tag.
         config=json.dumps(config).replace("</", "<\\/"),
         scripts="\n".join(scripts),
@@ -166,12 +173,46 @@ def render_page(markdown_source: str, options: PageOptions) -> RenderedPage:
     )
 
 
-def base_url_for(options: PageOptions, *, scheme: str = "mdview") -> str:
+_IMG_SRC = re.compile(r'(<img[^>]*?\bsrc=")([^"]*)(")')
+_ABSOLUTEISH = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:|^[/#?]")
+
+
+def _absolutize_images(body_html: str, options: PageOptions, scheme: str) -> str:
+    """Rewrite document-relative ``<img src>`` to the document's directory.
+
+    The viewer navigates to ``mdview://page/<id>``, so relative references in
+    the body would otherwise resolve against the wrong directory.  Only
+    ``<img>`` tags ever reach here (raw HTML in documents is escaped), and we
+    touch neither anchors (``#fragments`` must stay same-document) nor
+    absolute URLs, so this stays a two-line regex instead of a parser.
+    """
+    if options.document_dir is None:
+        return body_html
+    directory = options.document_dir.resolve()
+    if scheme == "file":
+        base = directory.as_uri() + "/"
+    else:
+        quoted = quote(str(directory).replace("\\", "/"), safe="")
+        base = f"{scheme}://{SCHEME_HOST_DOC}/{quoted}/"
+
+    def rewrite(match: re.Match[str]) -> str:
+        src = match.group(2)
+        if _ABSOLUTEISH.match(src):
+            return match.group(0)
+        return match.group(1) + base + quote(src, safe="/%") + match.group(3)
+
+    return _IMG_SRC.sub(rewrite, body_html)
+
+
+def base_url_for(options: PageOptions, *, scheme: str | None = None) -> str:
     """Base URL so relative references (images!) resolve to real local files.
 
     ``mdview://doc/<percent-encoded dir>/`` lets the scheme handler map
-    ``img.png`` to a file *inside that directory only*.
+    ``img.png`` to a file *inside that directory only*.  Defaults to the
+    scheme the page was rendered for.
     """
+    if scheme is None:
+        scheme = options.asset_scheme
     if scheme == "file" and options.document_dir is not None:
         return f"{options.document_dir.resolve().as_uri()}/"
     if options.document_dir is None:

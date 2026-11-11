@@ -19,7 +19,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtGui import QFileOpenEvent
-from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineUrlScheme
+from PySide6.QtWebEngineCore import QWebEngineProfile
 from PySide6.QtWidgets import QApplication
 
 from mdview.core.palette import PaletteRegistry
@@ -49,6 +49,7 @@ class AppContext:
     app: QApplication
     profile: QWebEngineProfile
     scheme_handler: MdViewSchemeHandler
+    interceptor: OfflineInterceptor
     registry: PaletteRegistry
     settings: Settings
     window: MainWindow
@@ -118,16 +119,25 @@ def create_application(argv: Sequence[str] = ()) -> MDViewApplication:
     return MDViewApplication(argv)
 
 
-def build_profile(app: QApplication, scheme_handler: MdViewSchemeHandler) -> QWebEngineProfile:
-    """One off-the-record profile for the whole app, with our scheme + interceptor."""
+def build_profile(
+    app: QApplication, scheme_handler: MdViewSchemeHandler
+) -> tuple[QWebEngineProfile, OfflineInterceptor]:
+    """One off-the-record profile for the whole app, with our scheme + interceptor.
+
+    Returns the profile and its interceptor: Qt does not take ownership of the
+    interceptor, so the app must keep a reference to it alive.
+    """
     profile = QWebEngineProfile(app)
-    profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.NoHttpCache)
+    profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.NoCache)
     profile.setPersistentCookiesPolicy(
         QWebEngineProfile.PersistentCookiesPolicy.NoPersistentCookies
     )
-    profile.installUrlSchemeHandler(QWebEngineUrlScheme(SCHEME_NAME), scheme_handler)
-    profile.setRequestInterceptor(OfflineInterceptor(profile))
-    return profile
+    # The scheme *flags* are registered globally (register_mdview_scheme); the
+    # profile only needs the handler, keyed by the scheme name as bytes.
+    profile.installUrlSchemeHandler(SCHEME_NAME, scheme_handler)
+    interceptor = OfflineInterceptor(profile)
+    profile.setUrlRequestInterceptor(interceptor)
+    return profile, interceptor
 
 
 def ensure_assets(*, allow_download: bool = True) -> tuple[str, ...]:
@@ -137,7 +147,7 @@ def ensure_assets(*, allow_download: bool = True) -> tuple[str, ...]:
     if report["missing"] and allow_download:
         try:
             notes.append(f"first run: {fetch_assets().summary()}")
-        except Exception as exc:  # noqa: BLE001 - report it, then still open the window
+        except Exception as exc:
             notes.append(f"could not fetch bundled assets: {exc}")
     still_missing = vendored_report()["missing"]
     if still_missing:
@@ -170,7 +180,7 @@ def bootstrap(
     settings = resolve_initial_settings(settings, registry)
 
     scheme_handler = MdViewSchemeHandler(parent=app)
-    profile = build_profile(app, scheme_handler)
+    profile, interceptor = build_profile(app, scheme_handler)
     window = MainWindow(settings, registry, scheme_handler, profile)
 
     def open_files(paths: Sequence[str]) -> None:
@@ -183,6 +193,7 @@ def bootstrap(
         app=app,
         profile=profile,
         scheme_handler=scheme_handler,
+        interceptor=interceptor,
         registry=registry,
         settings=settings,
         window=window,

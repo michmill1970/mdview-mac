@@ -30,7 +30,8 @@ def test_unknown_and_plain_languages_degrade_to_text(dark_palette: Palette) -> N
 def test_html_in_code_is_escaped(dark_palette: Palette) -> None:
     result = highlight('<script>alert("x")</script>', "html", dark_palette.colors)
     assert "<script>" not in result.html  # never live markup
-    assert "&lt;" in result.html and "&gt;" in result.html  # but visible as text
+    assert "&lt;" in result.html  # but visible as text
+    assert "&gt;" in result.html
 
 
 def test_styles_follow_the_palette(dark_palette: Palette, light_palette: Palette) -> None:
@@ -47,7 +48,7 @@ def test_same_colors_reuse_the_cached_style_class(dark_palette: Palette) -> None
     from mdview.render.highlight import _style_class  # cache identity, not internals
 
     key_a = tuple(sorted(dark_palette.colors.items()))
-    key_b = tuple(sorted(dict(reversed(list(dark_palette.colors.items())))))
+    key_b = tuple(sorted(dict(reversed(list(dark_palette.colors.items()))).items()))
     assert key_a == key_b  # sanity: same content, different construction
     assert _style_class(key_a) is _style_class(key_b)
 

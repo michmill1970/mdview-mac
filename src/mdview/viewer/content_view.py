@@ -13,7 +13,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWebEngineCore import (
     QWebEnginePage,
@@ -21,7 +21,9 @@ from PySide6.QtWebEngineCore import (
     QWebEngineSettings,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWidgets import QWidget
 
+from mdview.core.appearance import Appearance
 from mdview.core.palette import Palette
 from mdview.render.page import RenderedPage
 from mdview.render.theme_css import page_css
@@ -40,19 +42,33 @@ JsCallback = Callable[[object], None]
 class ContentViewPage(QWebEnginePage):
     """Page policy: nothing leaves the app except genuine web links."""
 
-    def acceptNavigationRequest(  # noqa: N802
+    #: ``(level, message, line_number, source_id)`` for every console hit.
+    console_message = Signal(object, str, int, str)
+
+    def acceptNavigationRequest(
         self,
-        url: QUrl,
+        url: QUrl | str,
         navigation_type: QWebEnginePage.NavigationType,
         is_user_initiated: bool,
     ) -> bool:
-        scheme = url.scheme().lower()
+        target = url if isinstance(url, QUrl) else QUrl(url)
+        scheme = target.scheme().lower()
         if scheme in {"mdview", "about", "data"}:
             return True
         if scheme in {"http", "https", "mailto"}:
             # Links open in the user's browser; the viewer never navigates away.
-            QDesktopServices.openUrl(url)
+            QDesktopServices.openUrl(target)
         return False
+
+    def javaScriptConsoleMessage(
+        self,
+        level: QWebEnginePage.JavaScriptConsoleMessageLevel,
+        message: str,
+        line_number: int,
+        source_id: str,
+    ) -> None:
+        # Qt exposes this as a virtual method, not a signal: bridge it onward.
+        self.console_message.emit(level, message, line_number, source_id)
 
 
 def configure_settings(settings: QWebEngineSettings) -> None:
@@ -79,7 +95,7 @@ def configure_settings(settings: QWebEngineSettings) -> None:
 class ContentView(QWebEngineView):
     """Content pane for a single document."""
 
-    def __init__(self, profile: QWebEngineProfile, parent=None) -> None:
+    def __init__(self, profile: QWebEngineProfile, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._content_page = ContentViewPage(profile, self)
         self.setPage(self._content_page)
@@ -87,7 +103,7 @@ class ContentView(QWebEngineView):
         self._page_id: str | None = None
         self._base_url: str | None = None
         self._load_errors: list[str] = []
-        self._content_page.javaScriptConsoleMessage.connect(self._on_console_message)
+        self._content_page.console_message.connect(self._on_console_message)
 
     # ------------------------------------------------------------ loading --
     def show_page(self, page: RenderedPage, *, page_id: str) -> None:
@@ -122,7 +138,7 @@ class ContentView(QWebEngineView):
         """Live palette swap: replace the generated ``:root`` + token CSS block."""
         self._run(_JS_SET_PALETTE.format(css=_js_string(css)))
 
-    def reapply_theme(self, palette: Palette, font_size_px: int, *, appearance: str) -> None:
+    def reapply_theme(self, palette: Palette, font_size_px: int, *, appearance: Appearance) -> None:
         """Full theme refresh after a palette or appearance change."""
         self.apply_palette_css(page_css(palette, font_size_px, appearance=appearance))
 
@@ -131,7 +147,9 @@ class ContentView(QWebEngineView):
         self._run(_JS_SCROLL_Y, callback)
 
     def restore_scroll(self, scroll_y: int) -> None:
-        if self.loadProgress() >= 100:
+        # PySide6 stubs expose loadProgress only as a signal; at runtime the
+        # no-argument call returns the int percentage.
+        if self.loadProgress() >= 100:  # type: ignore[operator]
             self._run(_JS_SET_SCROLL_Y.format(y=int(scroll_y)))
 
     def is_ready(self, callback: JsCallback) -> None:
@@ -153,8 +171,8 @@ class ContentView(QWebEngineView):
         self,
         level: QWebEnginePage.JavaScriptConsoleMessageLevel,
         message: str,
-        source_id: str,
         line_number: int,
+        source_id: str,
     ) -> None:
         if level in (
             QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel,

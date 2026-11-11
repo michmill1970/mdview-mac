@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QTabWidget
+from PySide6.QtWidgets import QTabWidget, QWidget
 
 from mdview.core.tabs import Tab, TabId, TabModel
 from mdview.viewer.content_view import ContentView
@@ -21,7 +21,9 @@ TabFactory = Callable[[], ContentView]
 class TabView(QTabWidget):
     """Tab strip + content panes, mirrored against a TabModel."""
 
-    def __init__(self, model: TabModel, tab_factory: TabFactory, parent=None) -> None:
+    def __init__(
+        self, model: TabModel, tab_factory: TabFactory, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self._model = model
         self._tab_factory = tab_factory
@@ -57,17 +59,17 @@ class TabView(QTabWidget):
         self._syncing = True
         try:
             desired = [tab.tab_id for tab in self._model.tabs]
-            current = [self.widget(i).property("tab_id") for i in range(self.count())]
+            current = [
+                widget.property("tab_id") for i in range(self.count()) if (widget := self.widget(i))
+            ]
             for tab_id in [t for t in current if t not in desired]:
                 self._remove(tab_id)
-            for index, tab in enumerate(self._model.tabs):
+            for tab in self._model.tabs:
                 if tab.tab_id not in self._views:
                     self._add(tab)
                 self.setTabText(self._index_of(tab.tab_id), tab.title)
-                self.setTabToolTip(
-                    self._index_of(tab.tab_id),
-                    f"{tab.document.path}\n{'changed on disk' if tab.stale else tab.document.title}",
-                )
+                status = "changed on disk" if tab.stale else tab.document.title
+                self.setTabToolTip(self._index_of(tab.tab_id), f"{tab.document.path}\n{status}")
             self._reorder(desired)
             active = self._model.active
             target = -1 if active is None else self._index_of(active.tab_id)

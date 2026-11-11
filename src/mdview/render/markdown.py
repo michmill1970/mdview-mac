@@ -11,7 +11,7 @@ Deliberate choices:
 * Code blocks are highlighted by Pygments here in Python (palette-driven), not
   by highlight.js in the page.
 * Math and Mermaid are *deferred*: the core emits inert placeholders
-  (``<span class="md-math" data-tex="…">`` / ``<pre class="mermaid">``) that the
+  (``<span class="md-math" data-tex="…">`` / ``<pre class="md-mermaid">``) that the
   bundled KaTeX / Mermaid scripts hydrate.  The core therefore has no JS and
   stays unit-testable; ``used_math`` / ``used_mermaid`` tell the page assembler
   which scripts to include at all.
@@ -23,10 +23,11 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from html import escape
-from typing import Any
+from typing import Any, cast
 
 from markdown_it import MarkdownIt
-from markdown_it.renderer import RendererProtocol
+from markdown_it.renderer import RendererHTML
+from markdown_it.token import Token
 from mdit_py_plugins.dollarmath import dollarmath_plugin
 from mdit_py_plugins.footnote import footnote_plugin
 from mdit_py_plugins.tasklists import tasklists_plugin
@@ -51,8 +52,11 @@ _UNSAFE_URL_RE = re.compile(r"^\s*(?:javascript|vbscript|file)\s*:", re.IGNORECA
 _MAILTO_RE = re.compile(r"^\s*mailto:", re.IGNORECASE)
 _FENCE_LANG_RE = re.compile(r"^(\S+)")
 
-#: markdown-it renderer-rule shape: (tokens, idx, options, env, slf) -> str.
-RenderRule = Callable[[list[Any], int, Mapping[str, Any], Any, RendererProtocol], str]
+#: markdown-it-py 4.x renderer-rule shape: ``(tokens, idx, options, env) -> str``
+#: (``Renderer.render`` calls overridden rules with exactly these four arguments).
+#: ``env`` is markdown-it's free-form per-render dict; we never read from it.
+#: markdown-it exports no public alias for this, so we own it here (the only one).
+RenderRule = Callable[[list[Token], int, Mapping[str, Any], object], str]
 
 
 @dataclass(slots=True)
@@ -80,7 +84,6 @@ class _Tracker:
 
 
 # ------------------------------------------------------------------ rules --
-# markdown-it calls render rules as ``rule(tokens, idx, options, env, slf)``.
 
 
 def _make_fence_rule(tracker: _Tracker, palette: Palette) -> RenderRule:
@@ -88,14 +91,16 @@ def _make_fence_rule(tracker: _Tracker, palette: Palette) -> RenderRule:
         tokens: list[Any],
         idx: int,
         options: Mapping[str, Any],
-        env: Any,
-        slf: RendererProtocol,
+        env: object,
     ) -> str:
         token = tokens[idx]
         info = (token.info or "").strip()
         if info.lower() == "mermaid":
             tracker.used_mermaid = True
-            return f'<pre class="md-mermaid">{escape(token.content)}</pre>\n'
+            # Escape what could open markup (& and <) but keep `>` raw: mermaid
+            # arrows (`-->`) survive verbatim into Mermaid's textContent input.
+            safe = token.content.replace("&", "&amp;").replace("<", "&lt;")
+            return f'<pre class="md-mermaid">{safe}</pre>\n'
         match = _FENCE_LANG_RE.match(info)
         lang = match.group(1).lower() if match else ""
         tracker.note_language(lang)
@@ -110,8 +115,7 @@ def _make_math_rules(tracker: _Tracker) -> tuple[RenderRule, RenderRule]:
         tokens: list[Any],
         idx: int,
         options: Mapping[str, Any],
-        env: Any,
-        slf: RendererProtocol,
+        env: object,
     ) -> str:
         tracker.used_math = True
         tex = tokens[idx].content
@@ -121,8 +125,7 @@ def _make_math_rules(tracker: _Tracker) -> tuple[RenderRule, RenderRule]:
         tokens: list[Any],
         idx: int,
         options: Mapping[str, Any],
-        env: Any,
-        slf: RendererProtocol,
+        env: object,
     ) -> str:
         tracker.used_math = True
         tex = tokens[idx].content
@@ -133,12 +136,20 @@ def _make_math_rules(tracker: _Tracker) -> tuple[RenderRule, RenderRule]:
     return inline, block
 
 
+def _render_open_tag(token: Token) -> str:
+    """Serialize ``<tag attrs…>`` — same output as markdown-it's renderToken
+    would give for a non-self-closing inline token, minus the private renderer."""
+    parts = [token.tag]
+    for name, value in token.attrs.items():
+        parts.append(f'{name}="{escape(str(value), quote=True)}"')
+    return f"<{' '.join(parts)}>"
+
+
 def _link_open_rule(
     tokens: list[Any],
     idx: int,
     options: Mapping[str, Any],
-    env: Any,
-    slf: RendererProtocol,
+    env: object,
 ) -> str:
     """Annotate links so the GUI can route them, and drop dangerous schemes."""
     token = tokens[idx]
@@ -150,7 +161,7 @@ def _link_open_rule(
     elif not _MAILTO_RE.match(url):
         token.attrSet("rel", "noreferrer noopener")
         token.attrSet("data-external", "1")
-    return slf.renderToken(tokens, idx, options)
+    return _render_open_tag(token)
 
 
 # ---------------------------------------------------------------- builder --
@@ -168,10 +179,14 @@ def build_markdown_it(palette: Palette, tracker: _Tracker) -> MarkdownIt:
     dollarmath_plugin(md, allow_labels=False)
     footnote_plugin(md)
     math_inline, math_block = _make_math_rules(tracker)
-    md.renderer.rules["fence"] = _make_fence_rule(tracker, palette)
-    md.renderer.rules["math_inline"] = math_inline
-    md.renderer.rules["math_block"] = math_block
-    md.renderer.rules["link_open"] = _link_open_rule
+    # MarkdownIt's default renderer is always RendererHTML, but the protocol
+    # it is typed against does not expose ``rules``.
+    renderer = cast("RendererHTML", md.renderer)
+    rules = cast("dict[str, RenderRule]", renderer.rules)
+    rules["fence"] = _make_fence_rule(tracker, palette)
+    rules["math_inline"] = math_inline
+    rules["math_block"] = math_block
+    rules["link_open"] = _link_open_rule
     return md
 
 

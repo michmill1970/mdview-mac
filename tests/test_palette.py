@@ -21,6 +21,7 @@ from mdview.core.palette import (
     slugify,
 )
 
+
 def test_normalize_hex_accepts_shorthand_and_expands() -> None:
     assert normalize_hex_color("#ABC") == "#aabbcc"
     assert normalize_hex_color(" #1F2328 ") == "#1f2328"
@@ -109,7 +110,8 @@ def test_registry_user_palette_overrides_builtin_but_keeps_original(
 ) -> None:
     user_dir = tmp_path / "user"
     override = Palette.from_dict(
-        dark_palette.to_dict() | {"name": "GitHub Dark (mine)", "colors": dict(dark_palette.colors, background="#000000")}
+        dark_palette.to_dict()
+        | {"name": "GitHub Dark (mine)", "colors": dict(dark_palette.colors, background="#000000")}
     )
     override.write(user_dir)
 

@@ -54,13 +54,16 @@ def test_require_vendored_raises_with_fix_hint() -> None:
 
 def test_verify_assets_on_empty_dir() -> None:
     problems = verify_assets()
-    assert problems and "lock.json" in problems[0]
+    assert problems
+    assert "lock.json" in problems[0]
 
 
 # ----------------------------------------------------------------- fetch --
 
 
-def test_fetch_end_to_end_with_fake_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_end_to_end_with_fake_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     tarballs = {
         KATEX.tarball_url: make_tarball(
             {
@@ -79,7 +82,8 @@ def test_fetch_end_to_end_with_fake_registry(tmp_path: Path, monkeypatch: pytest
     report = fetch_assets()
     assert sorted(report.downloaded) == ["katex@0.19.1", "mermaid@12.3.0"]
     assert report.files_written == 4
-    assert report.lock_path and report.lock_path.is_file()
+    assert report.lock_path is not None
+    assert report.lock_path.is_file()
 
     require_vendored()  # must not raise anymore
     assert vendored_report()["missing"] == []
@@ -98,7 +102,13 @@ def test_checksum_detects_tampering(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         fetch_module,
         "_download",
         {
-            url: make_tarball({"package/dist/katex.min.js": b"v1", "package/dist/katex.min.css": b"c", "package/dist/fonts/f.ttf": b"f"}),
+            url: make_tarball(
+                {
+                    "package/dist/katex.min.js": b"v1",
+                    "package/dist/katex.min.css": b"c",
+                    "package/dist/fonts/f.ttf": b"f",
+                }
+            ),
             mermaid.tarball_url: make_tarball({"package/dist/mermaid.min.js": b"m"}),
         }.__getitem__,
     )
@@ -115,8 +125,9 @@ def test_path_traversal_member_is_rejected(tmp_path: Path) -> None:
 
 
 def test_empty_match_raises_helpful_error() -> None:
+    blob = make_tarball({"package/README.md": b"x"})
     with pytest.raises(AssetError, match="package layout changed"):
-        fetch_module._extract(KATEX, make_tarball({"package/README.md": b"x"}), Path("/tmp/whatever"))
+        fetch_module._extract(KATEX, blob, Path("/tmp/whatever"))
 
 
 def test_corrupt_lock_is_reported(tmp_path: Path) -> None:
@@ -133,5 +144,5 @@ def test_corrupt_lock_is_reported(tmp_path: Path) -> None:
 def test_asset_and_static_urls() -> None:
     assert asset_url("katex", "katex.min.js") == "mdview://assets/katex/katex.min.js"
     assert static_url("app.js") == "mdview://static/app.js"
-    assert asset_url("katex", "/katex.min.css").count("//") == 2  # no double slash
+    assert asset_url("katex", "/katex.min.css").count("//") == 1  # only the scheme's "//"
     assert asset_url("katex", "katex.min.js", scheme="file").startswith("file://")

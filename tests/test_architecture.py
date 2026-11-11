@@ -8,8 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import mdview
-
 FORBIDDEN = ("PySide6", "PyQt6", "PyQt5")
 PURE_PACKAGES = ("mdview.core", "mdview.render")
 

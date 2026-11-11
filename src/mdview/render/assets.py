@@ -19,14 +19,15 @@ import fnmatch
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, TypedDict
 
 from mdview.core.errors import AssetError
-from mdview.core.paths import app_dir, AppDir, package_dir, static_dir
+from mdview.core.paths import AppDir, app_dir, package_dir, static_dir
 
 __all__ = [
     "ASSETS",
     "AssetSpec",
+    "VendoredReport",
     "asset_url",
     "require_vendored",
     "vendor_dir",
@@ -55,8 +56,7 @@ class AssetSpec:
     @property
     def tarball_url(self) -> str:
         return (
-            f"https://registry.npmjs.org/{self.npm_package}/-/"
-            f"{self.npm_package}-{self.version}.tgz"
+            f"https://registry.npmjs.org/{self.npm_package}/-/{self.npm_package}-{self.version}.tgz"
         )
 
     def vendor_path(self, tarball_member: str) -> str:
@@ -109,13 +109,22 @@ def _installed_paths() -> dict[str, Path]:
     return out
 
 
-def vendored_report() -> dict[str, object]:
+class VendoredReport(TypedDict):
+    """JSON-friendly shape of :func:`vendored_report`."""
+
+    vendor_dir: str
+    present: int
+    missing: list[str]
+    versions: dict[str, str]
+
+
+def vendored_report() -> VendoredReport:
     """Diagnostics for ``mdview assets`` (counts + missing manifest entries)."""
     installed = _installed_paths()
     present = sorted(rel for rel, path in installed.items() if path.is_file())
     missing = sorted(rel for rel, path in installed.items() if not path.is_file())
     lock = vendor_dir() / LOCKFILE
-    versions = {}
+    versions: dict[str, str] = {}
     if lock.is_file():
         try:
             versions = json.loads(lock.read_text(encoding="utf-8")).get("versions", {})

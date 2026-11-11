@@ -75,6 +75,7 @@ class Document:
         except OSError as exc:
             raise DocumentError(f"cannot read {self.path}: {exc.strerror or exc}") from exc
 
+    @property
     def stat_token(self) -> tuple[int, int]:
         """Cheap ``(mtime_ns, size)`` pair used to detect external edits."""
         try:

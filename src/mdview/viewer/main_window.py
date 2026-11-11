@@ -12,14 +12,17 @@ import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 
 from PySide6.QtCore import QFileSystemWatcher, Qt, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWebEngineCore import QWebEngineProfile
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -29,7 +32,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mdview.core.appearance import Appearance, AppearanceMode
+from mdview.core.appearance import (
+    Appearance,
+    AppearanceMode,
+    appearance_mode_values,
+)
 from mdview.core.document import Document, is_supported
 from mdview.core.errors import AssetError, DocumentError
 from mdview.core.fonts import FONT_SIZE_MAX_PX, FONT_SIZE_MIN_PX, FontSize
@@ -96,14 +103,16 @@ class MainWindow(QMainWindow):
         self._sync_theme_menus()
         self._update_font_widgets()
 
-        self.styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
+        # QStyleHints is application-wide; colorSchemeChanged fires when macOS
+        # flips light/dark (Qt >= 6.8).
+        QApplication.styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
 
     # ------------------------------------------------------------- setup --
     def _make_view(self) -> ContentView:
         return ContentView(self._profile, self)
 
     def _make_actions(self) -> None:
-        handlers: dict[str, Callable[[], None]] = {
+        handlers: dict[str, Callable[[], object]] = {
             "open": self._prompt_open,
             "closeTab": self._close_current_tab,
             "reload": self._reload_current,
@@ -116,11 +125,11 @@ class MainWindow(QMainWindow):
             "reveal": self._reveal_current_folder,
         }
         specs: tuple[tuple[str, str, QKeySequence | None], ...] = (
-            ("open", "&Open…", QKeySequence.Open),
-            ("closeTab", "&Close Tab", QKeySequence.Close),
+            ("open", "&Open…", QKeySequence(QKeySequence.StandardKey.Open)),
+            ("closeTab", "&Close Tab", QKeySequence(QKeySequence.StandardKey.Close)),
             ("reload", "&Reload", QKeySequence("Ctrl+R")),
-            ("zoomOut", "Zoom &Out", QKeySequence.ZoomOut),
-            ("zoomIn", "Zoom &In", QKeySequence.ZoomIn),
+            ("zoomOut", "Zoom &Out", QKeySequence(QKeySequence.StandardKey.ZoomOut)),
+            ("zoomIn", "Zoom &In", QKeySequence(QKeySequence.StandardKey.ZoomIn)),
             ("zoomReset", "Actual &Size", QKeySequence("Ctrl+0")),
             ("editPalettes", "&Edit Palettes…", QKeySequence("Ctrl+Shift+P")),
             ("previousTab", "Select &Previous Tab", QKeySequence("Ctrl+Shift+Tab")),
@@ -148,12 +157,12 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._actions["closeTab"])
 
         edit_menu = bar.addMenu("&Edit")
-        for role, text in (
-            (QAction.StandardRole.CopyRole, "&Copy"),
-            (QAction.StandardRole.SelectAllRole, "Select &All"),
-        ):
+        # PySide6 6.12 does not bind Qt's Copy/SelectAll menu roles; the
+        # heuristic role lets the macOS platform menu pick these items up by
+        # their standard text (and they stay normal actions elsewhere).
+        for text in ("&Copy", "Select &All"):
             action = QAction(text, self)
-            action.setRole(role)  # macOS provides the native items + shortcuts
+            action.setMenuRole(QAction.MenuRole.TextHeuristicRole)
             edit_menu.addAction(action)
 
         view_menu = bar.addMenu("&View")
@@ -175,8 +184,13 @@ class MainWindow(QMainWindow):
         self._appearance_group = QActionGroup(self)
         self._appearance_group.setExclusive(True)
         self._appearance_actions: dict[AppearanceMode, QAction] = {}
-        for mode, text in (("system", "Follow &System"), ("light", "&Light"), ("dark", "&Dark")):
-            action = QAction(text, self)
+        mode_labels: dict[AppearanceMode, str] = {
+            "system": "Follow &System",
+            "light": "&Light",
+            "dark": "&Dark",
+        }
+        for mode in appearance_mode_values():
+            action = QAction(mode_labels[mode], self)
             action.setCheckable(True)
             action.triggered.connect(lambda _=False, m=mode: self._set_appearance_mode(m))
             self._appearance_group.addAction(action)
@@ -191,10 +205,11 @@ class MainWindow(QMainWindow):
         self._build_palette_menus()
 
     def _build_palette_menus(self) -> None:
-        for menu, appearance in (
+        menus: tuple[tuple[QMenu, Appearance], ...] = (
             (self._light_palette_menu, "light"),
             (self._dark_palette_menu, "dark"),
-        ):
+        )
+        for menu, appearance in menus:
             menu.clear()
             group = QActionGroup(menu)
             group.setExclusive(True)
@@ -444,7 +459,7 @@ class MainWindow(QMainWindow):
         active = self._model.active
         self.setWindowTitle(f"{active.title} — MDView" if active else "MDView")
 
-    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+    def closeEvent(self, event: QCloseEvent) -> None:
         active = self._model.active
         self._settings = _with_fields(
             self._settings,
@@ -494,12 +509,14 @@ def page_id_for(tab_id: TabId) -> str:
 
 
 def _with_fields(settings: Settings, **changes: object) -> Settings:
-    return replace(settings, **changes).normalized()
+    # Values are pre-normalised by callers; ``Any`` keeps dataclasses.replace
+    # happy without leaking Any into the public signature.
+    return replace(settings, **cast("dict[str, Any]", changes)).normalized()
 
 
 def system_appearance(widget: QWidget) -> Appearance:
     """Map Qt's colour scheme onto our model (offscreen/Linux reports Unknown)."""
-    scheme = widget.styleHints().colorScheme()
+    scheme = QApplication.styleHints().colorScheme()
     return "dark" if scheme == Qt.ColorScheme.Dark else "light"
 
 

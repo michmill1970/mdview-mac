@@ -155,11 +155,11 @@ class PaletteEditor(QDialog):
         top.addWidget(QLabel("Name", form_host))
         self._name_edit = QLineEdit(form_host)
         self._name_edit.setObjectName("paletteName")
-        self._name_edit.textEdited.connect(lambda _=: self._on_edited())
+        self._name_edit.textEdited.connect(lambda _=None: self._on_edited())
         top.addWidget(self._name_edit, 1)
         top.addWidget(QLabel("Mode", form_host))
         self._appearance_combo = _AppearanceCombo(form_host)
-        self._appearance_combo.currentIndexChanged.connect(lambda _=: self._on_edited())
+        self._appearance_combo.currentIndexChanged.connect(lambda _=None: self._on_edited())
         top.addWidget(self._appearance_combo)
         form.addLayout(top)
 
@@ -330,7 +330,7 @@ class PaletteEditor(QDialog):
             return
         try:
             path = candidate.write(app_dir(AppDir.PALETTES))
-        except Exception as exc:  # noqa: BLE001 - the viewer must survive a bad write
+        except Exception as exc:
             QMessageBox.critical(self, "Could not save palette", str(exc))
             return
         self._registry.upsert(candidate)

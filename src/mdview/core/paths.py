@@ -18,6 +18,8 @@ import sys
 from enum import StrEnum
 from pathlib import Path
 
+from mdview.core.errors import MDViewError
+
 __all__ = ["AppDir", "builtin_palettes_dir", "data_dir", "package_dir", "static_dir"]
 
 APP_NAME = "MDView"
@@ -59,7 +61,13 @@ def data_dir() -> Path:
 def app_dir(kind: AppDir) -> Path:
     """Return (and create) one of the named writable sub-directories."""
     path = data_dir() / kind.value
-    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise MDViewError(
+            f"cannot create data directory {path}: {exc} — "
+            f"set ${DATA_DIR_ENV_VAR} to a writable location"
+        ) from exc
     return path
 
 

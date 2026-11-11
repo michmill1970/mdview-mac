@@ -1,0 +1,17 @@
+# Python / build artifacts
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+*.egg-info/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# PyInstaller intermediates (kept out of the tracked build/ dir by make-app.sh)
+.build-work/
+
+# macOS
+.DS_Store

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mdview.core.appearance import flip, normalize_appearance_mode, resolve_appearance
 from mdview.core.document import Document
 from mdview.core.settings import Settings
 from mdview.core.tabs import TabModel
 from mdview.core.theme import default_palette_ids, mode_is_pinned, selection_for
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from mdview.core.palette import PaletteRegistry
@@ -63,7 +62,8 @@ def test_close_last_tab_goes_empty(tmp_path: Path) -> None:
     model = TabModel()
     tab = model.open_document(make_doc(tmp_path))
     model.close(tab.tab_id)
-    assert model.is_empty and model.active is None
+    assert model.is_empty
+    assert model.active is None
     assert not model.close(tab.tab_id)  # idempotent
 
 
@@ -100,7 +100,8 @@ def test_scroll_memory_and_stale_flag(tmp_path: Path) -> None:
     model.set_scroll(tab.tab_id, 400)
     assert tab.scroll_y == 400
     stale = model.mark_stale(doc.path, True)
-    assert stale is tab and stale.stale
+    assert stale is tab
+    assert stale.stale
     assert model.mark_stale(Path("/nowhere/x.md")) is None
 
 
@@ -137,7 +138,8 @@ def test_resolve_appearance_matrix() -> None:
     assert resolve_appearance("system", "dark") == "dark"
     assert normalize_appearance_mode("nonsense") == "system"
     assert flip("dark") == "light"
-    assert mode_is_pinned("dark") and not mode_is_pinned("system")
+    assert mode_is_pinned("dark")
+    assert not mode_is_pinned("system")
 
 
 def test_selection_for_follows_system(registry: PaletteRegistry) -> None:
@@ -151,7 +153,8 @@ def test_selection_for_follows_system(registry: PaletteRegistry) -> None:
 def test_selection_for_pinned_mode_and_override(registry: PaletteRegistry) -> None:
     settings = Settings(appearance_mode="dark", palette_dark="dracula-dark")
     sel = selection_for(registry, settings, "light")
-    assert sel.palette.id == "dracula-dark" and sel.is_dark
+    assert sel.palette.id == "dracula-dark"
+    assert sel.is_dark
     override = selection_for(registry, settings, "dark", override="high-contrast-light")
     assert override.palette.id == "high-contrast-light"
     assert override.appearance == "light"  # a preview override flips the appearance too
