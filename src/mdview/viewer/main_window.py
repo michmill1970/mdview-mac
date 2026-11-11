@@ -14,8 +14,20 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
-from PySide6.QtCore import QFileSystemWatcher, Qt, QUrl
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDesktopServices, QKeySequence
+from PySide6.QtCore import QFileSystemWatcher, Qt, QTimer, QUrl
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QCloseEvent,
+    QColor,
+    QDesktopServices,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QKeySequence,
+    QResizeEvent,
+)
 from PySide6.QtWebEngineCore import QWebEngineProfile
 from PySide6.QtWidgets import (
     QApplication,
@@ -49,16 +61,22 @@ from mdview.core.tabs import Tab, TabId, TabModel
 from mdview.core.theme import PaletteSelection, default_palette_ids, selection_for
 from mdview.render.page import PageOptions, RenderedPage, render_page
 from mdview.viewer.content_view import ContentView
+from mdview.viewer.drop_guard import markdown_paths_from_mime
 from mdview.viewer.palette_editor import PaletteEditor
 from mdview.viewer.scheme import MdViewSchemeHandler, PageStore
 from mdview.viewer.tab_view import TabView
 
 _EMPTY_HINT = """<h2>MDView</h2>
-<p>Open a Markdown file to get started.</p>
+<p>Open a Markdown file to get started &mdash; or drag one into this window.</p>
 <p><kbd>&#8984;O</kbd> Open &nbsp; <kbd>&#8984;=</kbd> / <kbd>&#8984;-</kbd> text size
 &nbsp; <kbd>&#8984;0</kbd> reset</p>"""
 
 _MARKDOWN_FILTER = "Markdown (*.md *.markdown);;All files (*)"
+
+#: Debounce for hiding the drop overlay on DragLeave: a drag crossing a child
+#: boundary (web view <-> tab strip) emits leave/enter back-to-back, and the
+#: overlay must not flicker across that seam.
+_DROP_LEAVE_HIDE_MS = 50
 
 
 class MainWindow(QMainWindow):
@@ -106,10 +124,21 @@ class MainWindow(QMainWindow):
         self._palette_watcher.addPath(str(self._palette_dir))
         self._palette_watcher.directoryChanged.connect(self.reload_palettes)
 
+        # Drops (Phase 10): the window's own drag virtuals cover the tab bar,
+        # empty state and margins; ContentView forwards the QtWebEngine
+        # renderer's events to these same handlers (drop_guard.DropSink).
+        self.setAcceptDrops(True)
+        self._drop_overlay = self._make_drop_overlay()
+        self._drop_hide_timer = QTimer(self)
+        self._drop_hide_timer.setSingleShot(True)
+        self._drop_hide_timer.setInterval(_DROP_LEAVE_HIDE_MS)
+        self._drop_hide_timer.timeout.connect(self._hide_drop_overlay)
+
         self._make_actions()
         self._make_menus()
         self._make_toolbar()
         self._sync_theme_menus()
+        self._apply_drop_overlay_style()
         self._update_font_widgets()
 
         # QStyleHints is application-wide; colorSchemeChanged fires when macOS
@@ -118,7 +147,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- setup --
     def _make_view(self) -> ContentView:
-        return ContentView(self._profile, self)
+        return ContentView(self._profile, self, drop_sink=self)
 
     def _make_actions(self) -> None:
         handlers: dict[str, Callable[[], object]] = {
@@ -538,6 +567,7 @@ class MainWindow(QMainWindow):
             "<li><kbd>⌘=</kbd> / <kbd>⌘-</kbd> Text size &nbsp; <kbd>⌘0</kbd> Reset"
             " &nbsp; (zoom bar: bottom of the window)</li>"
             "<li><kbd>⌘1…⌘9</kbd> Jump to tab &nbsp; <kbd>⌃⇧Tab</kbd> / <kbd>⌃Tab</kbd> Cycle</li>"
+            "<li>Drag Markdown files from Finder onto the window to open them.</li>"
             "<li>Appearance and palettes live in their own menus.</li>"
             "<li>Files changed on disk reload themselves automatically.</li>"
             "</ul>",
@@ -567,6 +597,80 @@ class MainWindow(QMainWindow):
                 self._watcher.addPath(path)
             self.statusBar().showMessage(f"Reloaded {Path(path).name}", 3000)
 
+    # ------------------------------------------------------------- drops --
+    # DropSink protocol (viewer/drop_guard.py): these four methods serve both
+    # the window's own drag virtuals and the forwarded events from every
+    # ContentView, so a drop lands in exactly one place no matter where in
+    # the window it happened.
+    def drag_enter(self, event: QDragEnterEvent) -> None:
+        if markdown_paths_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+            self._show_drop_overlay()
+        else:
+            event.ignore()
+
+    def drag_move(self, event: QDragMoveEvent) -> None:
+        if markdown_paths_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+            self._show_drop_overlay()  # re-assert: covers leave/enter seams
+        else:
+            event.ignore()
+
+    def drag_leave(self, event: QDragLeaveEvent) -> None:
+        event.accept()
+        self._drop_hide_timer.start()
+
+    def drop(self, event: QDropEvent) -> None:
+        paths = markdown_paths_from_mime(event.mimeData())
+        self._hide_drop_overlay()
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.open_paths(paths)
+
+    def _make_drop_overlay(self) -> QWidget:
+        """Full-window drop hint: dashed accent frame + caption (DESIGN.md §7).
+
+        ``WA_TransparentForMouseEvents`` keeps the overlay out of the
+        ``childAt()`` hit-test that drives drag delivery, so it can never
+        intercept -- or be dropped onto instead of -- the widgets beneath it.
+        """
+        overlay = QWidget(self._stack)
+        overlay.setObjectName("dropOverlay")
+        overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        row = QVBoxLayout(overlay)
+        row.setContentsMargins(10, 10, 10, 10)
+        label = QLabel("Drop Markdown files to open", overlay)
+        label.setObjectName("dropOverlayLabel")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row.addWidget(label)
+        overlay.hide()
+        return overlay
+
+    def _apply_drop_overlay_style(self) -> None:
+        """Theme the overlay from the same palette the pages use."""
+        colors = self.selection().palette.colors
+        wash = QColor(colors["background"])
+        accent = colors["accent"]
+        self._drop_overlay.setStyleSheet(
+            f"QWidget#dropOverlay {{ background: rgba({wash.red()}, {wash.green()},"
+            f" {wash.blue()}, 0.78); }}"
+            f"QLabel#dropOverlayLabel {{ border: 2px dashed {accent};"
+            " border-radius: 12px; font-size: 16px; font-weight: 600;"
+            f" color: {accent}; background: transparent; }}"
+        )
+
+    def _show_drop_overlay(self) -> None:
+        self._drop_hide_timer.stop()
+        self._drop_overlay.setGeometry(self._stack.rect())
+        self._drop_overlay.raise_()
+        self._drop_overlay.show()
+
+    def _hide_drop_overlay(self) -> None:
+        self._drop_hide_timer.stop()
+        self._drop_overlay.hide()
+
     # ------------------------------------------------------- window menu --
     def _toggle_zoom(self) -> None:
         """The non-macOS Window ▸ Zoom: AppKit does this natively on macOS."""
@@ -583,6 +687,23 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     # ---------------------------------------------------------------- Qt --
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        self.drag_enter(event)
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        self.drag_move(event)
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self.drag_leave(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self.drop(event)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self._drop_overlay.isVisible():
+            self._drop_overlay.setGeometry(self._stack.rect())
+
     def _sync_tabs(self) -> None:
         self._tab_view.sync()
         self._stack.setCurrentIndex(1 if self._model.count else 0)
@@ -612,6 +733,7 @@ class MainWindow(QMainWindow):
                 view.reapply_theme(
                     selection.palette, self._fonts.size_px, appearance=selection.appearance
                 )
+        self._apply_drop_overlay_style()  # same palette, same moment
         self._sync_theme_menus()
 
     def _sync_theme_menus(self) -> None:

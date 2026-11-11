@@ -28,6 +28,7 @@ from mdview.core.palette import Palette
 from mdview.render.mermaid_theme import mermaid_theme_vars
 from mdview.render.page import RenderedPage
 from mdview.render.theme_css import page_css
+from mdview.viewer.drop_guard import DragForwardFilter, DropSink
 from mdview.viewer.scheme import PageStore
 
 #: The JS surface of static/app.js -- keep the two files in sync (tested).
@@ -112,7 +113,13 @@ def configure_settings(settings: QWebEngineSettings) -> None:
 class ContentView(QWebEngineView):
     """Content pane for a single document."""
 
-    def __init__(self, profile: QWebEngineProfile, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        profile: QWebEngineProfile,
+        parent: QWidget | None = None,
+        *,
+        drop_sink: DropSink | None = None,
+    ) -> None:
         super().__init__(parent)
         self._content_page = ContentViewPage(profile, self)
         self.setPage(self._content_page)
@@ -126,6 +133,15 @@ class ContentView(QWebEngineView):
         self._live_state: list[tuple[str, list[object]]] = []
         self._content_page.console_message.connect(self._on_console_message)
         self._content_page.loadFinished.connect(self._replay_live_state)
+        # File drops (Phase 10): a drag over the content area is delivered to
+        # the QtWebEngine render surface, not to this view's window, so the
+        # guard watches this view *and* every widget nested inside it -- the
+        # QQuickWidget delegate and Chromium's input widgets appear lazily, on
+        # first show and per page load, and the guard extends itself to match.
+        self._drop_filter: DragForwardFilter | None = None
+        if drop_sink is not None:
+            self._drop_filter = DragForwardFilter(drop_sink, self)
+            self._drop_filter.install_tree(self)
 
     # ------------------------------------------------------------ loading --
     def show_page(self, page: RenderedPage, *, page_id: str) -> None:

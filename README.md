@@ -69,11 +69,15 @@ distributed.
 ## Features at a glance
 
 - `.md` / `.markdown`, multi-tab (`Cmd+1…9`, `Ctrl+Tab`), session restore
-- Opens any readable text file by path (drag, CLI, `File ▸ Open…`) as Markdown
-  — Finder double-click registration stays `.md`/`.markdown`; a path that
-  can't open (missing, directory, binary) gets a ⚠ error tab naming the reason
-  instead of failing silently, and `mdview open a.md gone.md` exits non-zero
-  while still opening the good file (`render`: missing → 1, unusable → 2)
+- Drag files from Finder onto the window — anywhere on it, several at a time —
+  to open them as tabs; a dashed frame says the drop will land (Dock-icon drops
+  work too)
+- Opens any readable text file by path (CLI, `File ▸ Open…`) as Markdown
+  — Finder double-click registration and the in-window drop gate stay
+  `.md`/`.markdown`; a path that can't open (missing, directory, binary) gets a
+  ⚠ error tab naming the reason instead of failing silently, and
+  `mdview open a.md gone.md` exits non-zero while still opening the good file
+  (`render`: missing → 1, unusable → 2)
 - `Cmd+=` / `Cmd+-` / `Cmd+0` **and** a toolbar font control (10–32 px)
 - GFM tables, task lists, strikethrough; Pygments code highlighting coloured
   by the active palette; KaTeX math; Mermaid diagrams — all assets on disk

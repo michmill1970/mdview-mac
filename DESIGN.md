@@ -23,6 +23,7 @@ behaviour described here is implemented and covered by the test suite.
 | R8 | Personal-use `.app` via PyInstaller, ad-hoc signed, launched via Info.plist document types |
 | R9 | Modern Python: uv, `pyproject.toml` as single source of truth, `src/` layout, full type hints, ruff lint+format, pytest, Python 3.12+ |
 | R10 | Strict pure-core / thin-GUI split; core is 100 % testable without Qt |
+| R11 | Drag `.md` / `.markdown` from Finder onto the window → open in tabs, with drop feedback |
 
 ## 2. Framework decision
 
@@ -93,6 +94,7 @@ CSS custom-property palette story; disqualifying on R7.
 │   content_view.py QWebEngineView + ContentViewPage (console bridge,    │
 │                  nav policy, live font/palette scripting)              │
 │   tab_view.py    QTabWidget ⇄ TabModel glue                            │
+│   drop_guard.py  file-drop policy + drag forwarding from the web view  │
 │   main_window.py menus, shortcuts, toolbar font control, appearance    │
 │   palette_editor.py  in-app palette editor dialog (live preview)       │
 │   capture.py     widget → PNG screenshots (used by GUI tests)         │
@@ -320,18 +322,61 @@ says "Python" when run unbundled (it comes from `Info.plist`'s `CFBundleName`
 = MDView in the packaged app).
 
 **Open-file policy** (Phase 6 field report). A path the user named
-explicitly — CLI argument, drag, `File ▸ Open…` — is opened *as Markdown*
+explicitly — CLI argument, `File ▸ Open…` — is opened *as Markdown*
 whatever its suffix: a `.txt` is friendlier to view than to refuse. Only
 genuinely unviewable inputs fail: missing files, directories, unreadable
 files, and files whose first 8 KiB contain a NUL byte (binary). The suffix
-set `SUPPORTED_SUFFIXES` deliberately governs **Finder registration only**
-(Info.plist must match it), never explicit opens. Both the GUI and the CLI
+set `SUPPORTED_SUFFIXES` governs **Finder registration** (Info.plist must
+match it) and, since Phase 10, **what an in-window drop offers** — see
+below; once a path is accepted it is opened by this same policy, so
+"accepted then failed" is visible as an error tab. Both the GUI and the CLI
 classify through one pure-core function, `core.document.inspect_openable`,
 so their verdicts cannot drift; `mdview render` maps them to exit codes
 (missing → 1, directory/binary → 2), and `mdview open` opens every good
 path and exits non-zero if any failed, printing each reason to stderr.
 Startup session restore is the one quiet caller: a path that vanished while
 the app was closed is skipped, not announced.
+
+**Drag & drop of files** (Phase 10). Dropping `.md`/`.markdown` files from
+Finder onto the window opens them as tabs, anywhere on the window (tab bar,
+content, empty state), in drop order, through the same `open_paths()` route
+as `File ▸ Open…` — so titles, error tabs, the palette of the new tab and
+zoom all come free. Policy lives in
+`viewer/drop_guard.markdown_paths_from_mime`: local-file URLs whose suffix is
+in `SUPPORTED_SUFFIXES` (case-insensitive), kept in drop order; a `.png` in a
+mixed drop vanishes silently, and a drag with no Markdown in it is refused
+outright, so the feedback never promises what the drop will not deliver.
+
+The integration problem is QtWebEngine, and it is not what the obvious
+answer ("`setAcceptDrops(True)` on the window") suggests. Measured against
+Qt 6.12 (offscreen, asserted by tests in `tests/test_drag_drop.py`):
+an unguarded `QWebEngineView` *already* has `acceptDrops()` true — Chromium
+needs it for HTML5 drag-and-drop — so it claims the drag, accepts it, and
+the drop dies inside the page. And event filters cannot simply be bolted
+onto the view: `QApplication::notify` retargets a drag to the nearest
+ancestor that accepts drops *before any filter runs*, so a filter on a
+widget that refuses drops never fires. `DragForwardFilter` therefore (a)
+marks each widget it watches as a drop target, which stops the retargeting
+there, (b) forwards `DragEnter`/`DragMove`/`DragLeave`/`Drop` to the
+window's `DropSink` methods and consumes them, so the page sees nothing and
+cannot navigate to a dropped `file://`, and (c) re-installs itself on every
+widget added underneath — the render surface is a `QQuickWidget` delegate
+created on first show with Chromium's own input widgets nested inside it,
+so a one-shot `findChildren()` pass would miss them. `MainWindow` itself is
+the sink: `setAcceptDrops(True)` plus the four Qt virtuals delegating to the
+same four methods, which is also what the filtered events call.
+
+Feedback is a `QWidget` child of the central `QStackedWidget`, raised above
+everything and sized to it on every `resizeEvent`: a 2 px dashed accent frame
+and a "Drop Markdown files to open" caption, styled from the resolved palette
+(accent colour plus a 78 %-alpha wash of the background over the page). It is
+`WA_TransparentForMouseEvents`, which is what keeps it from intercepting the
+drop it advertises — drag delivery hit-tests with `childAt()`, and a
+mouse-transparent widget is skipped along with its whole subtree. Showing is
+re-asserted on every `DragMove` and hiding is debounced by 50 ms, because the
+child enter/leave seams fire `DragLeave` constantly during a real drag.
+`QFileOpenEvent` (Finder double-click, drop on the Dock icon) keeps its own
+route into `open_paths()`, tested as parity against in-window drops.
 
 **Error tabs** (Phase 6). A failed open never fails silently: the path gets
 a normal tab titled `⚠ name` whose `Tab.error` holds the reason and whose
@@ -386,7 +431,9 @@ showing an error tab).
 - Finder double-click → Launch Services posts a `QFileOpenEvent`, *not* argv:
   `MDViewApplication.event()` handles it and replays events that arrive before
   the main window exists (`set_open_handler`). This is the single most
-  load-bearing macOS detail in the project.
+  load-bearing macOS detail in the project. Dropping a file on the **Dock
+  icon** posts the same event, so Dock drops, double-click and in-window
+  drags (§7) are three doors to one `open_paths()` call.
 - Ad-hoc signing after build (`build/make-app.sh`, POSIX `sh` + `set -eu`,
   idempotent re-runs). PyInstaller's framework copy-out dumps Qt's payload
   under `<framework>/Versions/Resources/` — the `QtWebEngineProcess.app`
@@ -426,9 +473,11 @@ Three rings, mirrored by pytest markers (`gui`, `webengine`) and CI selection:
    contracts, offline template references, CLI commands.
 2. **GUI contract tests** (`-m gui`, offscreen, pytest-qt): tab open/close/
    ordering, menu/shortcut wiring, appearance switching, font sync, settings
-   persistence, palette-editor round-trip incl. live preview — with a session
-   fixture that creates the app's own `MDViewApplication` *before* pytest-qt
-   (pytest-qt reuses the existing `QApplication` singleton).
+   persistence, palette-editor round-trip incl. live preview, and drag-and-drop
+   opening (synthesised `QDragEnterEvent`/`QDropEvent` pairs at the window, the
+   tab bar, the empty state and the render surface) with its feedback overlay.
+   A session fixture creates the app's own `MDViewApplication` *before*
+   pytest-qt (pytest-qt reuses the existing `QApplication` singleton).
 3. **Live WebEngine smoke** (`-m webengine`): the product-level proof — a real
    document through `mdview://` with KaTeX, mermaid, Pygments, table, and a
    relative image; live font + palette changes without reload; the offline
@@ -445,7 +494,13 @@ only via `toEncoded()`; Qt6 `QUrl` keeps dot segments; `HttpCacheType.NoCache`;
 (all probes wrap `JSON.stringify`); Chromium records *no* resource-timing
 entries for scheme-handler responses, so the offline proof pairs the (still
 asserted) zero-http resource list with the interceptor's blocklist and the
-DOM's own `href/src` inventory.
+DOM's own `href/src` inventory; a `QWebEngineView` has `acceptDrops()` true by
+default and keeps drags for itself, and Qt retargets a drag to the nearest
+drop-accepting ancestor *before* event filters run — both reasons
+`viewer/drop_guard.py` has to mark the widgets it watches as drop targets
+(§7); `QApplication::notify` dispatches `DragMove`/`Drop`/`DragLeave` only to
+the drag manager's live target, so a test that wants a drop must send an
+accepted `DragEnter` first.
 
 ## 11. Phase boundaries & follow-ups (not Phase 1)
 

@@ -9,6 +9,7 @@ platform unchanged.
 
 from __future__ import annotations
 
+import contextlib
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -76,7 +77,28 @@ def qt_application():
 
     prepare_webengine_environment()
     app = create_application(["mdview-pytest"])
-    return app
+    yield app
+    # Deterministic Qt/Chromium teardown.  Left to the garbage collector at
+    # interpreter exit, Chromium's C++ tears down *after* PySide wrappers are
+    # gone, which segfaults the process (exit 139) *after* the suite passed —
+    # intermittently, more visibly once views carry drag event filters.
+    # Destroying every top-level widget here, with Python still healthy,
+    # removes that shutdown race for good.
+    import gc
+
+    from PySide6.QtWidgets import QApplication
+
+    # destroy(), not close(): close() would run closeEvent hooks that persist
+    # app state — with the isolated-data-dir fixture already torn down, that
+    # would aim at the real $HOME.  destroy() deletes the C++ tree directly,
+    # which is all Chromium teardown needs; RuntimeError means the wrapper's
+    # C++ object is already gone.
+    for widget in list(QApplication.topLevelWidgets()):
+        with contextlib.suppress(RuntimeError):
+            widget.destroy()
+    for _ in range(3):
+        app.processEvents()
+    gc.collect()
 
 
 @pytest.fixture(autouse=True)

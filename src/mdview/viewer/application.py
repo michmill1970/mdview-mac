@@ -60,9 +60,11 @@ class AppContext:
 class MDViewApplication(QApplication):
     """QApplication that turns macOS ``FileOpen`` events into open requests.
 
-    This is what makes Finder double-click work in the bundled .app: Launch
-    Services delivers a ``QFileOpenEvent`` to the application, not argv, and
-    without this handler the document would simply be ignored.
+    This is what makes Finder double-click *and* Dock-icon drops work in the
+    bundled .app: Launch Services delivers a ``QFileOpenEvent`` to the
+    application, not argv, and without this handler the document would simply
+    be ignored.  The handler routes through the same ``open_paths`` logic as
+    in-window drag-and-drop and ``File ▸ Open…`` (DESIGN.md §7).
     """
 
     def __init__(self, argv: Sequence[str] = ()) -> None:
