@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QWidget
 
 from mdview.core.appearance import Appearance
 from mdview.core.palette import Palette
+from mdview.render.mermaid_theme import mermaid_theme_vars
 from mdview.render.page import RenderedPage
 from mdview.render.theme_css import page_css
 from mdview.viewer.scheme import PageStore
@@ -32,6 +33,7 @@ from mdview.viewer.scheme import PageStore
 #: The JS surface of static/app.js -- keep the two files in sync (tested).
 _JS_SET_FONT_SIZE = "window.mdview.setFontSize({size})"
 _JS_SET_PALETTE = "window.mdview.setPaletteCss({css})"
+_JS_SET_MERMAID_THEME = "window.mdview.setMermaidTheme({vars})"
 _JS_SCROLL_Y = "window.mdview.scrollY()"
 _JS_SET_SCROLL_Y = "window.mdview.setScrollY({y})"
 _JS_READY = "document.documentElement.dataset.mdviewReady === '1'"
@@ -138,9 +140,21 @@ class ContentView(QWebEngineView):
         """Live palette swap: replace the generated ``:root`` + token CSS block."""
         self._run(_JS_SET_PALETTE.format(css=_js_string(css)))
 
+    def apply_mermaid_theme(self, palette: Palette) -> None:
+        """Live Mermaid re-theme: palette-derived themeVariables, re-rendered.
+
+        Palette changes never reload the page (scroll position!), so hydrated
+        diagrams must be re-rendered by app.js with the new colours.  The
+        payload is a JSON object literal (JS accepts it verbatim as an
+        argument -- not stringified twice, or mermaid.initialize chokes).
+        """
+        payload = json.dumps(mermaid_theme_vars(palette), sort_keys=True)
+        self._run(_JS_SET_MERMAID_THEME.format(vars=payload))
+
     def reapply_theme(self, palette: Palette, font_size_px: int, *, appearance: Appearance) -> None:
         """Full theme refresh after a palette or appearance change."""
         self.apply_palette_css(page_css(palette, font_size_px, appearance=appearance))
+        self.apply_mermaid_theme(palette)
 
     # ---------------------------------------------------------- scrolling --
     def scroll_position(self, callback: JsCallback) -> None:

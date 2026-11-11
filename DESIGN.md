@@ -191,7 +191,21 @@ shape in 4.x):
   `<script>` — `import()` would scope the bundle's own `var` to the module and
   break its trailing global assignment (verified live; the failure mode is
   `Cannot read properties of undefined (reading 'mermaid')`). Documents without
-  diagrams never fetch the ~2 MB parser.
+  diagrams never fetch the ~2 MB parser. Mermaid initialises with
+  `theme: "base"` + `themeVariables` from `render/mermaid_theme.py`: one
+  palette token per role (node fill=`surface`, border=`accent`, text=`text`,
+  edges=`muted_text` ≥ 4.5:1 on every built-in background, clusters/notes=
+  `code_bg`) — Mermaid's built-in light/dark themes rendered off-palette
+  lavender nodes on dark palettes (Phase 5 vision review). Because a palette
+  change never reloads the page, holders keep their source on
+  `data-mdview-source` and `window.mdview.setMermaidTheme(vars)` re-renders
+  hydrated diagrams in place (`content_view.reapply_theme` sends both the CSS
+  and the variables).
+- **Blockquote attribution** → a blockquote paragraph's final line starting
+  with an em/en/double dash is wrapped (`core` rule) as
+  `<span class="md-quote-attribution">`; the stylesheet reads the quote body
+  at full `text` contrast, italic, on an accent rule, and mutes only that
+  span (Phase 5: a muted body was the weakest contrast on the page).
 
 **Vendoring (zero CDN at runtime).** `mdview fetch-assets` downloads
 `katex@0.19.1` and `mermaid@12.3.0` from the *npm registry*, extracts only the

@@ -90,6 +90,32 @@ def test_footnotes(dark_palette: Palette) -> None:
     assert "note body" in body.html
 
 
+def test_blockquote_attribution_line_gets_marker_span(dark_palette: Palette) -> None:
+    """A trailing ``— …`` line is the quote's attribution, not body text.
+
+    The stylesheet mutes ``.md-quote-attribution`` while the blockquote body
+    reads at full contrast (Phase 5), so the renderer must mark the line.
+    """
+    body = render_body(
+        '> "Open offline on a plane."\n> — the product owner, every meeting\n', dark_palette
+    )
+    assert '<span class="md-quote-attribution">— the product owner, every meeting</span>' in (
+        body.html
+    )
+    assert "&quot;Open offline on a plane.&quot;" in body.html  # body itself stays plain
+
+
+def test_attribution_wrapping_is_scoped_to_blockquotes(dark_palette: Palette) -> None:
+    body = render_body(
+        "> plain quote, no attribution\n\n— a dash outside a quote\n\n> a\n> -- two dashes too\n",
+        dark_palette,
+    )
+    assert "<p>plain quote, no attribution</p>" in body.html
+    assert body.html.count('class="md-quote-attribution"') == 1  # only the trailing quote line
+    assert '<span class="md-quote-attribution">-- two dashes too</span>' in body.html
+    assert '<span class="md-quote-attribution">— a dash' not in body.html
+
+
 @pytest.mark.parametrize(
     ("source", "used_math", "used_mermaid"),
     [("plain text", False, False), ("$x$", True, False), ("```mermaid\nA\n```", False, True)],

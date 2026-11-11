@@ -29,8 +29,8 @@ $$
 | ~~Strikethrough~~ | this row |
 | `inline code` | everywhere |
 
-> Blockquotes keep their left rule, the theme's border colour, and nested
-> *emphasis*, obviously.
+> Italic body at full contrast, accent rule, muted attribution line.
+> — the style guide
 
 - [x] Multi-tab editing of the same document reloads cleanly
 - [x] Palette changes apply without losing scroll position

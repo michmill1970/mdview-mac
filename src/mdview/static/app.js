@@ -69,25 +69,68 @@ async function renderMermaid() {
     console.warn("mdview: mermaid failed to load", error);
     return 0;
   }
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: "strict",
-    theme: config.mermaidTheme ?? "default",
-    fontFamily: "inherit",
-  });
   let done = 0;
   for (const block of blocks) {
-    const id = `mdview-diagram-${done}`;
+    const source = block.textContent ?? "";
     try {
-      const { svg } = await mermaid.render(id, block.textContent ?? "");
-      const holder = document.createElement("div");
-      holder.className = "md-mermaid-svg";
-      holder.innerHTML = svg; // mermaid output is sanitised (securityLevel: strict)
+      const holder = await renderDiagram(mermaid, source);
       block.replaceWith(holder);
       done += 1;
     } catch (error) {
       block.dataset.mdviewState = "error";
       block.title = String(error);
+    }
+  }
+  return done;
+}
+
+let mermaidSeq = 0;
+
+/** 'base' theme + palette-derived themeVariables -- Mermaid ships no identity
+ *  of its own then; the colours come from the active mdview palette. */
+function mermaidInitOptions() {
+  return {
+    startOnLoad: false,
+    securityLevel: "strict",
+    theme: config.mermaidTheme ?? "base",
+    themeVariables: config.mermaidThemeVariables ?? {},
+    fontFamily: "inherit",
+  };
+}
+
+/** Render one source string into a fresh holder div (keeps the source on the
+ *  holder so a later palette change can re-render it). */
+async function renderDiagram(mermaid, source) {
+  // Initialise per render: a live palette change landing between two diagrams
+  // takes effect for the next one without waiting for a page reload.
+  mermaid.initialize(mermaidInitOptions());
+  const { svg } = await mermaid.render(`mdview-diagram-${mermaidSeq++}`, source);
+  const holder = document.createElement("div");
+  holder.className = "md-mermaid-svg";
+  holder.dataset.mdviewSource = source;
+  holder.innerHTML = svg; // mermaid output is sanitised (securityLevel: strict)
+  return holder;
+}
+
+/** Live palette change: new themeVariables -> re-render every hydrated
+ *  diagram in place.  Cheap no-op before hydration (init picks the values up
+ *  on first render) and on documents without diagrams. */
+async function setMermaidTheme(variables) {
+  // Defensive: only an object reaches mermaid.initialize (never a string).
+  config.mermaidThemeVariables =
+    variables && typeof variables === "object" ? variables : {};
+  const mermaid = globalThis.mermaid;
+  const holders = [...document.querySelectorAll(".md-mermaid-svg")];
+  if (!mermaid || !holders.length) return 0;
+  let done = 0;
+  for (const holder of holders) {
+    try {
+      const fresh = await renderDiagram(mermaid, holder.dataset.mdviewSource ?? "");
+      holder.replaceWith(fresh);
+      done += 1;
+    } catch (error) {
+      // A re-theme failure must not blank an already-visible diagram.
+      console.warn("mdview: mermaid re-theme failed", error);
     }
   }
   return done;
@@ -127,6 +170,7 @@ function setSmoothScrolling(enabled) {
 window.mdview = {
   setFontSize,
   setPaletteCss,
+  setMermaidTheme,
   setSmoothScrolling,
   scrollY: () => window.scrollY,
   setScrollY: (y) => window.scrollTo({ top: Number(y) || 0, behavior: "auto" }),
@@ -135,6 +179,7 @@ window.mdview = {
     contentChars: (document.getElementById("mdview-content")?.textContent ?? "").length,
     math: document.querySelectorAll(".katex").length,
     mermaid: document.querySelectorAll(".md-mermaid-svg").length,
+    mermaidVars: Object.keys(config.mermaidThemeVariables ?? {}).length,
     code: document.querySelectorAll(".md-code").length,
     tables: document.querySelectorAll(".md-content table").length,
     fontSize: getComputedStyle(document.documentElement).getPropertyValue("--mdv-font-size").trim(),

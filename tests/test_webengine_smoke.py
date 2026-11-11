@@ -19,7 +19,6 @@ import pytest
 from PySide6.QtGui import QColor, QImage
 
 from mdview.core.palette import Palette
-from mdview.render.theme_css import page_css
 from mdview.viewer.application import AppContext, bootstrap
 from mdview.viewer.capture import capture
 from mdview.viewer.content_view import ContentView
@@ -115,6 +114,7 @@ class TestWebEngineSmoke:
         qtbot: Any,
         smoke_ctx: AppContext,
         dark_palette: Palette,
+        light_palette: Palette,
         tmp_path: Path,
     ) -> None:
         window: MainWindow = smoke_ctx.window
@@ -164,9 +164,30 @@ class TestWebEngineSmoke:
         view.set_font_size(23)
         _wait_js(qtbot, view, "window.mdview.stats().fontSize", lambda v: v == "23px", 10_000)
 
-        # 6. live palette swap changes the computed background
+        # 6. live palette swap changes the computed background AND re-renders
+        #    the Mermaid diagram with palette-derived themeVariables (a palette
+        #    change never reloads the page, so the hydrated SVG must re-theme
+        #    in place -- Phase 5).
         before = _js(qtbot, view, "window.mdview.stats().background")
-        view.apply_palette_css(page_css(dark_palette, 23, appearance="dark"))
+        stats = _js(qtbot, view, "window.mdview.stats()")
+        assert isinstance(stats, dict)
+        assert stats["mermaidVars"] >= 30  # the init payload carried palette colours
+
+        def svg_contains(color: Palette) -> str:
+            hex_value = color.color("surface").lower()  # e.g. #151b23
+            rgb = QColor(hex_value).getRgb()[:3]
+            rgb_form = f"rgb({rgb[0]}, {rgb[1]}, {rgb[2]})"  # serialiser-dependent forms
+            return (
+                "(() => { const s = document.querySelector('.md-mermaid-svg svg');"
+                " if (!s) return false;"
+                " const h = s.outerHTML.toLowerCase();"
+                f" return h.includes('{hex_value}') || h.includes('{rgb_form}'); }})()"
+            )
+
+        # initial render already used the (light) palette's surface fill
+        _wait_js(qtbot, view, svg_contains(light_palette), lambda v: v is True, 30_000)
+
+        view.reapply_theme(dark_palette, 23, appearance="dark")
         after = _wait_js(
             qtbot,
             view,
@@ -175,6 +196,8 @@ class TestWebEngineSmoke:
             10_000,
         )
         assert after != before
+        # and the diagram followed the palette (node fill -> dark surface)
+        _wait_js(qtbot, view, svg_contains(dark_palette), lambda v: v is True, 60_000)
 
         # 7. offline contract: Chromium attempted nothing off-scheme, the DOM
         # references nothing remote, and Qt's interceptor never had to block a

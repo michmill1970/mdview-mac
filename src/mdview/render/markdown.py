@@ -27,6 +27,7 @@ from typing import Any, cast
 
 from markdown_it import MarkdownIt
 from markdown_it.renderer import RendererHTML
+from markdown_it.rules_core import StateCore
 from markdown_it.token import Token
 from mdit_py_plugins.dollarmath import dollarmath_plugin
 from mdit_py_plugins.footnote import footnote_plugin
@@ -51,6 +52,9 @@ MARKDOWN_FEATURES: tuple[str, ...] = (
 _UNSAFE_URL_RE = re.compile(r"^\s*(?:javascript|vbscript|file)\s*:", re.IGNORECASE)
 _MAILTO_RE = re.compile(r"^\s*mailto:", re.IGNORECASE)
 _FENCE_LANG_RE = re.compile(r"^(\S+)")
+#: A blockquote's final line may be an attribution ("— the product owner").
+#: Em/en dashes as escapes on purpose (RUF001 wants them out of literals).
+_ATTRIBUTION_RE = re.compile(r"^(?:\u2014|\u2013|--)[ \t]+\S")
 
 #: markdown-it-py 4.x renderer-rule shape: ``(tokens, idx, options, env) -> str``
 #: (``Renderer.render`` calls overridden rules with exactly these four arguments).
@@ -164,6 +168,39 @@ def _link_open_rule(
     return _render_open_tag(token)
 
 
+def _wrap_attribution(children: list[Token]) -> None:
+    """Mark a paragraph's final line as attribution when it opens with a dash.
+
+    ``> quote\n> — someone`` is one paragraph in CommonMark; the stylesheet
+    needs the attribution line as its own element to keep it muted while the
+    body reads at full contrast.  We only ever wrap a *whole final line*
+    starting with an em/en/double dash, never mid-sentence text.
+    """
+    if not children:
+        return
+    last = children[-1]
+    if last.type != "text" or (len(children) > 1 and children[-2].type != "softbreak"):
+        return
+    if not _ATTRIBUTION_RE.match(last.content):
+        return
+    open_tag = Token("mdview_span_open", "span", 1)
+    open_tag.attrSet("class", "md-quote-attribution")
+    close_tag = Token("mdview_span_close", "span", -1)
+    children[-1:] = [open_tag, last, close_tag]
+
+
+def _attribution_rule(state: StateCore) -> None:
+    """Core rule: attribution lines inside blockquotes get the marker span."""
+    depth = 0
+    for token in state.tokens:
+        if token.type == "blockquote_open":
+            depth += 1
+        elif token.type == "blockquote_close":
+            depth -= 1
+        elif token.type == "inline" and depth > 0 and token.children:
+            _wrap_attribution(token.children)
+
+
 # ---------------------------------------------------------------- builder --
 
 
@@ -178,6 +215,7 @@ def build_markdown_it(palette: Palette, tracker: _Tracker) -> MarkdownIt:
     tasklists_plugin(md, label=False)
     dollarmath_plugin(md, allow_labels=False)
     footnote_plugin(md)
+    md.core.ruler.push("mdview_attribution", _attribution_rule)
     math_inline, math_block = _make_math_rules(tracker)
     # MarkdownIt's default renderer is always RendererHTML, but the protocol
     # it is typed against does not expose ``rules``.

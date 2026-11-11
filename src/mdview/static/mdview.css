@@ -85,11 +85,21 @@ body.md-body {
   margin: 2em 0;
 }
 
+/* Phase 5 vision review: --mdv-muted-text body was the weakest contrast in
+   the page (worse than normal body text).  Quotes now read at full body
+   contrast, italic, on an accent rule; only the attribution/cite line --
+   wrapped by the renderer as .md-quote-attribution -- stays muted. */
 .md-content blockquote {
   margin: 0 0 1em;
   padding: 0.1em 1em;
+  color: var(--mdv-text);
+  font-style: italic;
+  border-left: 0.25em solid var(--mdv-accent);
+}
+
+.md-content blockquote .md-quote-attribution,
+.md-content blockquote cite {
   color: var(--mdv-muted-text);
-  border-left: 0.25em solid var(--mdv-border);
 }
 
 /* ------------------------------------------------------------ lists/tasks -- */

@@ -31,6 +31,7 @@ from mdview.render.assets import (
     static_url,
 )
 from mdview.render.markdown import RenderedBody, render_body
+from mdview.render.mermaid_theme import mermaid_theme_vars
 from mdview.render.theme_css import page_css
 
 __all__ = ["CSP", "PageOptions", "RenderedPage", "base_url_for", "render_page"]
@@ -135,7 +136,11 @@ def render_page(markdown_source: str, options: PageOptions) -> RenderedPage:
     config = {
         "mermaidUrl": asset_url("mermaid", "mermaid.min.js", scheme=scheme),
         "appearance": options.appearance,
-        "mermaidTheme": "dark" if options.appearance == "dark" else "default",
+        # 'base' has no built-in identity of its own; every colour comes from
+        # the active palette (see render/mermaid_theme.py), so diagrams are
+        # palette-coherent on light and dark alike.
+        "mermaidTheme": "base",
+        "mermaidThemeVariables": mermaid_theme_vars(options.palette),
         "palette": options.palette.id,
         "smoothScrolling": options.smooth_scrolling,
     }

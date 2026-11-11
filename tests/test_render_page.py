@@ -78,9 +78,74 @@ def test_config_json_is_valid_and_decodes(dark_palette: Palette, options: PageOp
     blob = page.html[start:].split(">", 1)[1].split("</script>")[0]
     config = json.loads(blob.replace("<\\/", "</"))
     assert config["appearance"] == "dark"
-    assert config["mermaidTheme"] == "dark"
+    assert config["mermaidTheme"] == "base"
     assert config["mermaidUrl"].startswith("mdview://assets/mermaid/")
     assert config["palette"] == "github-dark"
+
+
+def test_init_payload_carries_palette_theme_variables(
+    dark_palette: Palette, light_palette: Palette
+) -> None:
+    """Phase 5: diagrams must inherit the active palette, not Mermaid's own.
+
+    The init payload is the page's config JSON; app.js hands ``theme`` +
+    ``mermaidThemeVariables`` straight to ``mermaid.initialize`` (and to the
+    live re-theme path), so asserting the payload is asserting the diagram
+    colours -- at pure-Python level, no browser needed.
+    """
+    options = PageOptions(palette=dark_palette, appearance="dark", skip_asset_check=True)
+    page = render_page("```mermaid\nA-->B\n```", options)
+    start = page.html.index('<script id="mdview-config" type="application/json">')
+    blob = page.html[start:].split(">", 1)[1].split("</script>")[0]
+    config = json.loads(blob.replace("<\\/", "</"))
+    theme_vars = config["mermaidThemeVariables"]
+    colors = dark_palette.colors
+    assert config["mermaidTheme"] == "base"
+    assert theme_vars["background"] == colors["background"]
+    assert theme_vars["primaryColor"] == colors["surface"]
+    assert theme_vars["primaryBorderColor"] == colors["accent"]
+    assert theme_vars["primaryTextColor"] == colors["text"]
+    assert theme_vars["lineColor"] == colors["muted_text"]
+    assert theme_vars["clusterBorder"] == colors["border"]
+    # A light render of the same page differs in exactly the palette tokens.
+    light_options = PageOptions(palette=light_palette, skip_asset_check=True)
+    light_page = render_page("```mermaid\nA-->B\n```", light_options)
+    light_start = light_page.html.index('<script id="mdview-config" type="application/json">')
+    light_blob = light_page.html[light_start:].split(">", 1)[1].split("</script>")[0]
+    light_vars = json.loads(light_blob.replace("<\\/", "</"))["mermaidThemeVariables"]
+    assert light_vars["primaryColor"] == light_palette.colors["surface"]
+    assert light_vars["lineColor"] == light_palette.colors["muted_text"]
+    assert set(light_vars) == set(theme_vars)
+
+
+def test_app_js_initialises_mermaid_with_palette_variables() -> None:
+    """The JS half of the contract (string level): init reads the palette vars."""
+    js_path = Path(__file__).resolve().parent.parent / "src" / "mdview" / "static" / "app.js"
+    js = js_path.read_text(encoding="utf-8")
+    assert 'theme: config.mermaidTheme ?? "base"' in js
+    assert "themeVariables: config.mermaidThemeVariables ?? {}" in js
+    # Live palette changes re-render hydrated diagrams (the page never reloads).
+    assert "setMermaidTheme" in js
+    assert "dataset.mdviewSource" in js
+
+
+def test_blockquote_body_is_full_contrast() -> None:
+    """Phase 5: muted blockquote body was the weakest contrast on the page.
+
+    Body text now reads at full text colour, italic, on an accent rule; only
+    the attribution/cite line (renderer-wrapped .md-quote-attribution) stays
+    muted.
+    """
+    css_path = Path(__file__).resolve().parent.parent / "src" / "mdview" / "static" / "mdview.css"
+    css = css_path.read_text(encoding="utf-8")
+    quote_rule = css.split(".md-content blockquote {", 1)[1].split("}", 1)[0]
+    assert "var(--mdv-text)" in quote_rule
+    assert "var(--mdv-accent)" in quote_rule
+    assert "font-style: italic" in quote_rule
+    assert "var(--mdv-muted-text)" not in quote_rule  # the body must not be dimmed
+    attribution_rule = css.split(".md-content blockquote .md-quote-attribution", 1)[1]
+    attribution_rule = attribution_rule.split("}", 1)[0]
+    assert "var(--mdv-muted-text)" in attribution_rule
 
 
 def test_content_security_policy_shape(dark_palette: Palette, options: PageOptions) -> None:
