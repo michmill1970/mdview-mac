@@ -2,42 +2,43 @@
 """PyInstaller spec for MDView.app (personal use, ad-hoc signed).
 
 Run via ``build/make-app.sh`` (which also handles the mandatory nested
-``QtWebEngineProcess`` re-signing).  Set ``MDVIEW_WITH_VENDOR=1`` to ship the
-fetched KaTeX/Mermaid tree inside the bundle; otherwise the app fetches them
-into the user data dir on first launch.
+``QtWebEngineProcess`` re-signing); it produces ``dist/MDView/MDView.app``
+(onedir BUNDLE nests the .app inside the COLLECT directory).
+
+Vendored KaTeX/Mermaid are deliberately **not** frozen into the bundle: they
+are fetched once by ``mdview fetch-assets`` into the writable user data dir
+(``~/Library/Application Support/MDView/vendor``) — on first launch when
+missing — so the bundle stays small and re-fetching keeps working.  Only our
+own ``static/`` and ``palettes/`` are shipped as datas; ``package_dir()``
+resolves to ``Contents/Resources`` inside the bundle, where PyInstaller
+unpacks them, while ``data_dir()``/``vendor_dir()`` always resolve to the
+Application Support tree (see DESIGN.md §8–§9).
 """
 
-import os
 from pathlib import Path
 
 ROOT = Path(SPEC).resolve().parent.parent  # repo root (build/.. )
 SRC = ROOT / "src"
-BLOCKER = []  # kept explicit: QtWebEngine hooks are reliable in PySide6 6.12
-
-with_vendor = os.environ.get("MDVIEW_WITH_VENDOR") == "1"
 
 datas = [
     (str(SRC / "mdview" / "static"), "mdview/static"),
     (str(SRC / "mdview" / "palettes"), "mdview/palettes"),
 ]
-if with_vendor:
-    data_home = Path(
-        os.environ.get("MDVIEW_DATA_DIR", str(Path.home() / "Library/Application Support"))
-    )
-    vendor_tree = data_home / "mdview" / "vendor"
-    if not (vendor_tree / "lock.json").is_file():
-        raise SystemExit(
-            "MDVIEW_WITH_VENDOR=1 but no vendor tree at "
-            f"{vendor_tree} — run `mdview fetch-assets` first."
-        )
-    datas.append((str(vendor_tree), "mdview/vendor/bundled"))
 
 a = Analysis(
     [str(SRC / "mdview" / "__main__.py")],
     pathex=[str(SRC)],
     binaries=[],
     datas=datas,
-    hiddenimports=["mdview.viewer"],  # imported dynamically via bootstrap
+    hiddenimports=[
+        "mdview.viewer",  # imported dynamically from mdview.__main__
+        # Belt and braces for the render stack: PyInstaller's PySide6 hooks
+        # collect QtWebEngineWidgets/QtWebEngineCore (plus QtWebEngineProcess
+        # and its resources) automatically, but a bundle without the helper
+        # shows a blank window, so the spec pins the intent explicitly.
+        "PySide6.QtWebEngineWidgets",
+        "PySide6.QtWebEngineCore",
+    ],
     hookspath=[],
     runtime_hooks=[],
     excludes=["tkinter", "matplotlib", "PyQt6"],
@@ -72,6 +73,8 @@ app = BUNDLE(
     coll,
     name="MDView.app",
     info_plist={
+        # This is what fixes the menu bar showing "Python" when the app is
+        # run unbundled: Launch Services uses CFBundleName for the app menu.
         "CFBundleName": "MDView",
         "CFBundleDisplayName": "MDView",
         "CFBundleIdentifier": "dev.personal.mdview",
@@ -90,9 +93,11 @@ app = BUNDLE(
                 "LSItemContentTypes": [
                     "net.daringfiretown.markdown",
                     "public.markdown",
-                    "public.plain-text",
                 ],
-                "CFBundleTypeExtensions": ["md", "markdown", "*"],
+                # Must match core.document.SUPPORTED_SUFFIXES exactly.  No
+                # "*" and no public.plain-text: MDView must not present
+                # itself for every text file on the system.
+                "CFBundleTypeExtensions": ["md", "markdown"],
             }
         ],
         # Double-click path: Launch Services delivers a QFileOpenEvent, which

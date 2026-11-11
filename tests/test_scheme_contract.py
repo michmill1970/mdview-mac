@@ -206,6 +206,65 @@ class TestDocumentHost:
         assert job.replied is not None
         assert job.replied[1] == b"p1c"
 
+    def test_symlinked_document_root_serves_inside_and_refuses_escape(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """macOS condition: the document directory may *be* a symlink.
+
+        macOS resolves ``/tmp``/``/var`` to ``/private/...`` and users symlink
+        Documents folders all the time.  Containment must be decided after
+        ``resolve()`` on both sides: legitimate files still load, while parent
+        traversal and symlinks that point out of the root stay refused.
+        """
+        real = tmp_path / "real-docs"
+        real.mkdir()
+        (real / "img.png").write_bytes(b"png-bytes")
+        (tmp_path / "secret.png").write_bytes(b"secret")
+        link = tmp_path / "docs-link"
+        link.symlink_to(real, target_is_directory=True)
+
+        handler = MdViewSchemeHandler(document_roots=[link])  # registered unresolved
+
+        # legit file reached through the symlinked directory: served
+        job = run(handler, self._doc_url(link, "img.png"))
+        assert job.replied is not None
+        assert job.replied[1] == b"png-bytes"
+
+        # parent-directory traversal through the symlink: still refused
+        job = run(handler, self._doc_url(link, "../secret.png"))
+        assert job.replied is None
+        assert job.error in {
+            QWebEngineUrlRequestJob.Error.UrlNotFound,
+            QWebEngineUrlRequestJob.Error.RequestDenied,
+        }
+
+        # a symlink *inside* the root that escapes it: refused (containment
+        # applies to the resolved target, not the lexical path)
+        (real / "trap.png").symlink_to(tmp_path / "secret.png")
+        job = run(handler, self._doc_url(link, "trap.png"))
+        assert job.replied is None
+        assert job.error == QWebEngineUrlRequestJob.Error.UrlNotFound
+
+    def test_deeper_symlinked_directory_still_denied(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """Resolving the request root must never *widen* what is reachable.
+
+        ``docs/sub`` is a symlink to a directory outside the registered root:
+        after resolution it is not under the allow-list, so it stays denied.
+        """
+        root = tmp_path / "docs"
+        root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.png").write_bytes(b"secret")
+        (root / "sub").symlink_to(outside, target_is_directory=True)
+
+        handler = MdViewSchemeHandler(document_roots=[root])
+        job = run(handler, self._doc_url(root / "sub", "secret.png"))
+        assert job.replied is None
+        assert job.error == QWebEngineUrlRequestJob.Error.RequestDenied
+
 
 class TestInterceptor:
     @pytest.mark.parametrize(

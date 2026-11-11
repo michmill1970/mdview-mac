@@ -257,11 +257,29 @@ Smooth scrolling (R4) is a `scroll-behavior: smooth` + wheel-tuning toggle
 (`smooth_scrolling`); selection/copy are Chromium-native and deliberately
 unhooked.
 
+**macOS chrome notes** (Phase 4 field report). `TabView` enables document-mode
+tabs *off macOS only* (`_USE_DOCUMENT_MODE_TABS`): qtbase's `QMacStyle`
+`PE_IndicatorTabClose` is commented "Make close button visible only on the
+hovered tab" and hides every non-hovered tab's close button while
+`documentMode` is on — unacceptable discoverability for a viewer whose tabs
+each own a document. With document mode off, QMacStyle draws each closable
+tab's button always and (on macOS 26 "Liquid Glass") renders tabs as native
+button bezels with a clearly selected tab, so no stylesheet hacks are needed;
+Linux/offscreen keeps document mode so the Fusion look the tests were tuned
+against is unchanged. `Cmd+W` is `QKeySequence.StandardKey.Close` (⌘W on
+macOS, Ctrl+F4 on Linux), verified by a real key-click test. Two accepted
+platform behaviors, deliberately *not* fought: the window title renders
+left-aligned beside the traffic lights (AppKit's native titlebar rendering
+under Qt 6.9 — Qt exposes no placement API, and `setUnifiedTitleAndToolBarOnMac`
+is pinned `False` so the titlebar stays a plain titlebar), and the app menu
+says "Python" when run unbundled (it comes from `Info.plist`'s `CFBundleName`
+= MDView in the packaged app).
+
 ## 8. Settings & on-disk layout
 
 ```
 <data dir>  (MDVIEW_DATA_DIR > ~/.local/share/mdview on Linux,
-             ~/Library/Application Support/mdview on macOS)
+             ~/Library/Application Support/MDView on macOS)
 ├── settings.json      versioned, tolerant loader (unknown keys survive →)
 ├── palettes/*.json    user palettes
 └── vendor/            KaTeX + mermaid trees + lock.json
@@ -273,23 +291,33 @@ unhooked.
 
 ## 9. macOS packaging (personal use)
 
-- `build/mdview.spec` (PyInstaller): onedir app bundle `MDView.app` pulling
-  `src/mdview` with its `static/` + `palettes/` datas, the **maintained PySide6
-  QtWebEngine hooks**, and an embedded `Info.plist`: `CFBundleDocumentTypes`
+- `build/mdview.spec` (PyInstaller): onedir app bundle, produced at
+  `dist/MDView/MDView.app` (the BUNDLE nests inside the COLLECT directory —
+  `make-app.sh` signs and reports that exact path), pulling `src/mdview` with
+  its `static/` + `palettes/` datas, the **maintained PySide6 QtWebEngine
+  hooks** plus belt-and-braces `hiddenimports` for
+  `PySide6.QtWebEngineWidgets`/`QtWebEngineCore`, and an embedded
+  `Info.plist`: `CFBundleDocumentTypes` for `.md`/`.markdown` only
   (`net.daringfiretown.markdown` + `public.markdown`, roles Viewer), UTI
   declarations for `.md`/`.markdown`, `NSHighResolutionCapable`,
-  `LSMinimumSystemVersion` 26.0, `CFBundleName/Identifier`.
+  `LSMinimumSystemVersion` 26.0, `CFBundleName/Identifier`, arm64.
 - Finder double-click → Launch Services posts a `QFileOpenEvent`, *not* argv:
   `MDViewApplication.event()` handles it and replays events that arrive before
   the main window exists (`set_open_handler`). This is the single most
   load-bearing macOS detail in the project.
-- Ad-hoc signing after build (`build/make-app.sh`): re-sign the nested
-  `QtWebEngineProcess.app` *first* with its inherited entitlements, then the
-  outer bundle, `codesign --force --sign -`. Skipping the nested helper is the
-  classic cause of "silent white window" on arm64.
-- `dev mode` vs bundled mode: `paths.bundled_root()` detects
-  `sys._MEIPASS`; vendored assets ship inside the bundle if present at build
-  time (`--with-vendor`), otherwise `fetch-assets` runs once on first launch.
+- Ad-hoc signing after build (`build/make-app.sh`, POSIX `sh` + `set -eu`,
+  idempotent re-runs): re-sign the nested `QtWebEngineProcess.app` *first*
+  with its inherited entitlements, then the outer bundle,
+  `codesign --force --sign -`. Skipping the nested helper is the classic
+  cause of "silent white window" on arm64.
+- Vendored assets (KaTeX/mermaid) are deliberately **not frozen into the
+  bundle**: there is one on-disk location, the data-dir vendor tree
+  (`app_dir(AppDir.VENDOR)` → `~/Library/Application Support/MDView/vendor`),
+  populated by `fetch-assets` on first launch, so no `--with-vendor` build
+  variant exists (the dead `MDVIEW_WITH_VENDOR` branch was removed in
+  Phase 4). Read-only package data (`static/`, `palettes/`) resolves through
+  `package_dir()`, which is `__file__`-based and therefore points inside the
+  bundle automatically — no `sys._MEIPASS` special-casing anywhere.
 
 ## 10. Testing strategy
 

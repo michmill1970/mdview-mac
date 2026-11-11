@@ -74,6 +74,13 @@ class MainWindow(QMainWindow):
         self.setObjectName("mainWindow")
         self.setWindowTitle("MDView")
         self.resize(1040, 780)
+        if sys.platform == "darwin":
+            # macOS chrome (DESIGN.md "macOS chrome notes"): the unified
+            # title/toolbar style renders the window title left-aligned next to
+            # the traffic lights.  Qt defaults this to off, but tabbed windows
+            # have historically opted in; pin it explicitly and do not chase
+            # further title-alignment cosmetics.
+            self.setUnifiedTitleAndToolBarOnMac(False)
 
         self._registry = registry
         self._scheme_handler = scheme_handler

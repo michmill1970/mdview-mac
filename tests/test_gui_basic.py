@@ -9,12 +9,13 @@ store, and the settings file, which is exactly where the app's logic lives.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QSize
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QDialogButtonBox, QLabel
+from PySide6.QtCore import QPoint, QSize
+from PySide6.QtGui import QColor, QKeySequence
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLabel, QTabBar, QToolBar
 
 from mdview.core.palette import PaletteRegistry
 from mdview.core.paths import AppDir, app_dir
@@ -244,3 +245,98 @@ class TestPaletteEditorSwatchesAndChrome:
         assert hint.isHidden()
         assert hint.text() == ""
         assert save.isEnabled()
+
+
+class TestMacTabChrome:
+    """Phase 4 macOS field report: tab-bar affordances (DESIGN.md chrome notes).
+
+    Offscreen CI is Fusion/Linux, so these assert the *platform-independent*
+    contract (closable tabs, the standard Close key, and that the macOS
+    document-mode switch is exactly platform-gated -- Linux keeps the tuned
+    Fusion look; macOS uses classic tabs for always-visible close buttons and
+    a distinct active tab, per the QMacStyle behaviour documented in DESIGN.md).
+    """
+
+    def test_document_mode_is_platform_gated(self, ctx: AppContext) -> None:
+        assert ctx.window._tab_view.documentMode() is (sys.platform != "darwin")
+
+    def test_tabs_are_closable_and_movable(self, ctx: AppContext) -> None:
+        tabs = ctx.window._tab_view
+        assert tabs.tabsClosable()
+        assert tabs.isMovable()
+        assert tabs.usesScrollButtons()
+
+    def test_close_tab_uses_the_standard_close_key(self, ctx: AppContext) -> None:
+        """QKeySequence::Close is ⌘W on macOS; binding the standard key is the guarantee."""
+        action = ctx.window._actions["closeTab"]
+        assert action.shortcut() == QKeySequence(QKeySequence.StandardKey.Close)
+
+    def test_platform_close_key_press_closes_the_tab(
+        self, ctx: AppContext, demo_file: Path, qtbot: pytest.FixtureRequest
+    ) -> None:
+        window = ctx.window
+        window.show()
+        qtbot.waitExposed(window)  # type: ignore[attr-defined]
+        window.open_paths([demo_file])
+        assert window.tab_count() == 1
+        combo = window._actions["closeTab"].shortcut()[0]  # ⌘W on macOS, Ctrl+F4 here
+        window.activateWindow()
+        qtbot.waitUntil(  # type: ignore[attr-defined]
+            lambda: QApplication.activeWindow() is window, timeout=2000
+        )
+        qtbot.keyClick(  # type: ignore[attr-defined]
+            window, combo.key(), combo.keyboardModifiers()
+        )
+        qtbot.waitUntil(lambda: window.tab_count() == 0, timeout=2000)  # type: ignore[attr-defined]
+
+    def test_clicking_the_tab_close_button_closes_the_tab(
+        self, ctx: AppContext, demo_file: Path
+    ) -> None:
+        """The tabsClosable contract end-to-end: the bar's close button path."""
+        window = ctx.window
+        window.open_paths([demo_file])
+        assert window.tab_count() == 1
+        tabs = window._tab_view
+        index = tabs.currentIndex()
+        assert index >= 0
+        bar = tabs.tabBar()
+        right = bar.tabButton(index, QTabBar.ButtonPosition.RightSide)
+        left = bar.tabButton(index, QTabBar.ButtonPosition.LeftSide)
+        button = right if right is not None else left
+        assert button is not None  # the affordance QMacStyle must keep visible on macOS
+        button.click()
+        assert window.tab_count() == 0
+
+
+class TestWindowLayout:
+    """Phase 4 item 3: content must never run under the bottom zoom/status bar."""
+
+    def test_bottom_zoom_bar_does_not_occlude_content(
+        self, ctx: AppContext, demo_file: Path, qtbot: pytest.FixtureRequest
+    ) -> None:
+        window = ctx.window
+        window.show()
+        qtbot.waitExposed(window)  # type: ignore[attr-defined]
+        window.open_paths([demo_file])
+        for view_id in window._tab_view.view_ids():
+            view = window.view_for(view_id)
+            assert view is not None
+
+        toolbar = window.findChild(QToolBar, "zoomToolbar")
+        assert toolbar is not None
+        assert toolbar.height() > 0  # really shown, not collapsed
+        toolbar_top = toolbar.mapTo(window, QPoint(0, 0)).y()
+
+        # The tab strip *and every content view* (QWebEngineView panes) must
+        # end strictly above the bar in window coordinates. QMainWindowLayout
+        # carves the toolbar out of the window area before laying out the
+        # central widget, so this is a regression guard, not a workaround.
+        stack = window.centralWidget()
+        assert stack is not None
+        stack_bottom = stack.mapTo(window, QPoint(0, stack.height() - 1)).y()
+        assert stack_bottom < toolbar_top
+        for view_id in window._tab_view.view_ids():
+            view = window.view_for(view_id)
+            assert view is not None
+            view_bottom = view.mapTo(window, QPoint(0, view.height() - 1)).y()
+            assert view_bottom < toolbar_top

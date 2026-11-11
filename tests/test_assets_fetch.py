@@ -124,6 +124,83 @@ def test_path_traversal_member_is_rejected(tmp_path: Path) -> None:
         fetch_module._extract(KATEX, evil, tmp_path)
 
 
+def test_sibling_prefix_escape_is_rejected(tmp_path: Path) -> None:
+    """``/x/vendor-evil`` must not pass a ``/x/vendor`` containment check.
+
+    The old string-prefix guard let exactly this through and wrote the file
+    outside the root before crashing in ``relative_to``.
+    """
+    root = tmp_path / "vendor"
+    root.mkdir()
+    evil = make_tarball({"package/dist/fonts/../../../vendor-evil/e.ttf": b"nope"})
+    with pytest.raises(AssetError, match="unsafe path"):
+        fetch_module._extract(KATEX, evil, root)
+    assert not (tmp_path / "vendor-evil").exists()
+
+
+# ------------------------------------------------- symlinked roots (macOS) --
+
+
+def test_extract_survives_symlinked_vendor_root(tmp_path: Path) -> None:
+    """Reproduces the macOS field failure on Linux.
+
+    On macOS ``/tmp``/``/var`` are symlinks to ``/private/...``, so extraction
+    targets come back resolved while the root does not.  A Linux symlink to
+    the vendor dir simulates that condition exactly: the old code raised
+    ``ValueError`` from ``relative_to`` (28 test errors on the Mac).
+    """
+    real = tmp_path / "vendor-real"
+    real.mkdir()
+    link = tmp_path / "vendor-link"
+    link.symlink_to(real, target_is_directory=True)
+    tarball = make_tarball(
+        {
+            "package/dist/katex.min.js": b"katex-js",
+            "package/dist/katex.min.css": b"katex-css",
+        }
+    )
+    hashes = fetch_module._extract(KATEX, tarball, link)  # unresolved root!
+    assert sorted(hashes) == ["katex/katex.min.css", "katex/katex.min.js"]
+    assert (real / "katex" / "katex.min.js").read_bytes() == b"katex-js"
+
+
+def test_fetch_end_to_end_with_symlinked_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Full fetch -> verify -> idempotency cycle behind a symlinked data dir."""
+    from mdview.core import paths
+
+    real = tmp_path / "data"
+    real.mkdir()
+    link = tmp_path / "data-link"
+    link.symlink_to(real, target_is_directory=True)
+    monkeypatch.setenv(paths.DATA_DIR_ENV_VAR, str(link))
+    mermaid = next(s for s in ASSETS if s.name == "mermaid")
+    monkeypatch.setattr(
+        fetch_module,
+        "_download",
+        {
+            KATEX.tarball_url: make_tarball(
+                {
+                    "package/dist/katex.min.js": b"k",
+                    "package/dist/katex.min.css": b"c",
+                    "package/dist/fonts/f.ttf": b"f",
+                }
+            ),
+            mermaid.tarball_url: make_tarball({"package/dist/mermaid.min.js": b"m"}),
+        }.__getitem__,
+    )
+
+    report = fetch_assets()
+    assert sorted(report.downloaded) == ["katex@0.19.1", "mermaid@12.3.0"]
+    assert report.files_written == 4
+    assert verify_assets() == []
+    require_vendored()
+
+    second = fetch_assets()
+    assert second.downloaded == []  # still detected as up to date via the symlink
+
+
 def test_empty_match_raises_helpful_error() -> None:
     blob = make_tarball({"package/README.md": b"x"})
     with pytest.raises(AssetError, match="package layout changed"):

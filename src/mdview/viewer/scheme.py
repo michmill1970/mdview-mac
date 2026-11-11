@@ -123,7 +123,13 @@ class MdViewSchemeHandler(QWebEngineUrlSchemeHandler):
         self, document_roots: list[Path] | None = None, parent: QObject | None = None
     ) -> None:
         super().__init__(parent)
-        self._document_roots: list[Path] = document_roots or []
+        # Containment is decided on *resolved* paths only (macOS /tmp and /var
+        # are symlinks to /private/..., and a document may live behind any
+        # symlink), so the allow-list is resolved once here as well as by
+        # :meth:`add_document_root`.
+        self._document_roots: list[Path] = [
+            directory.resolve() for directory in document_roots or []
+        ]
         self._vendor_root = app_dir(AppDir.VENDOR)
         self._static_root = static_dir()
 
@@ -185,12 +191,21 @@ class MdViewSchemeHandler(QWebEngineUrlSchemeHandler):
             return
         root = Path(unquote(encoded_dir.decode("utf-8")))
         relative = unquote(encoded_rel.decode("utf-8"))
+        # Resolve first, then compare: the URL may name the directory through a
+        # symlink (macOS /tmp, or a Documents folder redirected to another disk),
+        # and every registered root is already resolved.  Gating on the resolved
+        # root keeps containment meaningful; lexical comparisons would either
+        # deny legitimate files or let a symlinked root smuggle ``..`` escapes.
+        resolved_root = root.resolve()
         allowed_dirs = self._document_roots
-        if not any(root == allowed or root.is_relative_to(allowed) for allowed in allowed_dirs):
+        if not any(
+            resolved_root == allowed or resolved_root.is_relative_to(allowed)
+            for allowed in allowed_dirs
+        ):
             job.fail(QWebEngineUrlRequestJob.Error.RequestDenied)
             return
-        target = (root / relative).resolve()
-        if not target.is_relative_to(root) or not target.is_file():
+        target = (resolved_root / relative).resolve()
+        if not target.is_relative_to(resolved_root) or not target.is_file():
             job.fail(QWebEngineUrlRequestJob.Error.UrlNotFound)
             return
         _reply(job, target.read_bytes(), _content_type(target))

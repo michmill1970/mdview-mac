@@ -72,12 +72,18 @@ def _read_lock(root: Path) -> dict[str, object]:
 def _extract(spec: AssetSpec, tarball: bytes, root: Path) -> dict[str, str]:
     """Extract the manifest-matching members of an npm tarball; returns hashes."""
     hashes: dict[str, str] = {}
+    # Symlink-resolve the root once and never mix resolved with unresolved paths:
+    # macOS ``/tmp`` and ``/var`` are symlinks to ``/private/...``, so a caller
+    # that hands us an unresolved directory (pytest's tmp_path, or the default
+    # vendor cache) used to blow up in ``relative_to`` and could slip past a
+    # string-prefix containment check (``/vendor`` vs ``/vendor-evil``).
+    resolved_root = root.resolve()
     with tarfile.open(fileobj=BytesIO(tarball), mode="r:gz") as archive:
         for member in archive.getmembers():
             if not member.isfile() or not spec.matches(member.name):
                 continue
-            target = (root / spec.vendor_path(member.name)).resolve()
-            if not str(target).startswith(str(root.resolve())):  # tar path-traversal guard
+            target = (resolved_root / spec.vendor_path(member.name)).resolve()
+            if not target.is_relative_to(resolved_root):  # tar path-traversal guard
                 raise AssetError(f"unsafe path in tarball: {member.name}")
             handle = archive.extractfile(member)
             if handle is None:  # pragma: no cover - getmembers said it is a file
@@ -85,7 +91,7 @@ def _extract(spec: AssetSpec, tarball: bytes, root: Path) -> dict[str, str]:
             data = handle.read()
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
-            hashes[str(target.relative_to(root))] = _sha256(data)
+            hashes[str(target.relative_to(resolved_root))] = _sha256(data)
     if not hashes:
         raise AssetError(
             f"{spec.npm_package} tarball contained none of {spec.include} -- "

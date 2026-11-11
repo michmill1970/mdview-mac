@@ -7,6 +7,7 @@ button, drags a tab).  Each tab's widget is a :class:`ContentView`.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt
@@ -16,6 +17,17 @@ from mdview.core.tabs import Tab, TabId, TabModel
 from mdview.viewer.content_view import ContentView
 
 TabFactory = Callable[[], ContentView]
+
+#: macOS tab-chrome decision (Phase 4 field report, see DESIGN.md "macOS chrome
+#: notes").  QMacStyle renders document-mode tabs nearly flat and reveals each
+#: tab's close button *only while that tab is hovered* ("Make close button
+#: visible only on the hovered tab", ``PE_IndicatorTabClose`` in qtbase's
+#: qmacstyle_mac.mm).  Classic tab view keeps the close button on every tab and
+#: on macOS 26 ("Liquid Glass") draws tabs as native button bezels with a
+#: clearly selected tab -- discoverable and native, without stylesheet hacks.
+#: Off macOS (Linux CI, offscreen tests) document mode stays on so the Fusion
+#: look the visual tests were tuned against does not change.
+_USE_DOCUMENT_MODE_TABS = sys.platform != "darwin"
 
 
 class TabView(QTabWidget):
@@ -30,7 +42,7 @@ class TabView(QTabWidget):
         self._views: dict[TabId, ContentView] = {}
         self._syncing = False
         self.setObjectName("tabView")
-        self.setDocumentMode(True)
+        self.setDocumentMode(_USE_DOCUMENT_MODE_TABS)
         self.setTabsClosable(True)
         self.setMovable(True)
         self.setElideMode(Qt.TextElideMode.ElideRight)
