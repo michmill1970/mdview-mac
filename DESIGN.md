@@ -234,6 +234,36 @@ and page background before first paint). Live palette switching replaces that
 one `<style>` block via `window.mdview.setPaletteCss(...)` — no reload, so
 scroll position and selection survive.
 
+**The live-call queue (Phase 7 race).** Live-control injections used to call
+`window.mdview.X(...)` directly — but app.js is a `type="module"` tag, so
+`window.mdview` exists only once it evaluates (after parsing), while
+QtWebEngine runs injected `runJavaScript` as soon as the document's main-world
+context exists. On a (re)load that window lands *between* navigation and
+app.js, where the direct call threw `Cannot read properties of undefined
+(reading 'setPaletteCss')` and the user's font/palette change was silently
+lost (reproduced on macOS full-suite; fast Linux runs hid it). Three candidate
+fixes: retry-with-setTimeout in the snippet (can reorder two queued changes),
+Python waiting on `mdviewReady` (adds latency, still races a mid-flight
+reload), or a page-side queue drained at init — the queue wins because it
+needs no waits, cannot throw (the injected envelope creates
+`window.__mdviewPending` itself), and FIFO drain preserves call order across
+the race: Qt pushes `["setPaletteCss", [css]]` and calls `window.__mdviewFlush`
+if app.js is up; if not, the entries stay queued and app.js drains them once
+`window.mdview` is installed — *after* the render-time defaults, so the user's
+most recent state wins — and before `mdviewReady` flips to `'1'`, so readiness
+implies "final theme applied". There is a second half to the window, though:
+Qt's *load state* flips asynchronously after `reload()`, so an injection can
+also still land on the **outgoing** document and die with it. The page-side
+queue cannot follow a doomed window, so `ContentView` additionally retains the
+latest live state (last call per method, in send order) and replays it on every
+`loadFinished` — all live calls are idempotent whole-state assignments, so a
+replay is a no-op when the original applied and can never misorder a newer
+user change (same-page JS is FIFO). `ContentView` also stamps
+`mdviewReady='0'` (over the same ordered JS channel) before every `load()`/
+`reload()`: the old document's `'1'` would otherwise remain observable until
+the new navigation commits, inviting exactly the injection this protocol
+exists to absorb.
+
 The **palette editor** (`PaletteEditor` dialog, `Cmd+Shift+P`) lists all
 palettes, duplicates built-ins into the user directory, edits name/appearance/
 all 24 colours (swatch buttons → native colour picker + hex fields), previews

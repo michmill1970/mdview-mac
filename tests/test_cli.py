@@ -194,7 +194,7 @@ class TestOpenExitCodes:
         # The failure must not block the successful tab: both paths went to the GUI.
         assert launched == [[demo_file, missing]]
         err = capsys.readouterr().err
-        assert "file not found" in err
+        assert "File not found" in err
         assert "kitchen-sink.md" in err
 
     def test_app_exit_code_wins_when_app_fails(
@@ -209,7 +209,7 @@ class TestOpenExitCodes:
         blob.write_bytes(b"x\x00y")
         reasons = cli.preflight_open([demo_file, missing, tmp_path, blob])
         assert len(reasons) == 3
-        assert any("file not found" in r for r in reasons)
+        assert any("File not found" in r for r in reasons)
         assert any("directory" in r for r in reasons)
-        assert any("not a text file" in r for r in reasons)
+        assert any("Not a text file" in r for r in reasons)
         assert cli.preflight_open([demo_file]) == []

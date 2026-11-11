@@ -114,7 +114,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     reason = inspect_openable(args.path)
     if reason is not None:
         print(f"mdview: {reason}", file=sys.stderr)
-        return EXIT_ERROR if reason.startswith("file not found:") else EXIT_USAGE
+        return EXIT_ERROR if reason.lower().startswith("file not found:") else EXIT_USAGE
 
     document = Document.open(args.path)
 

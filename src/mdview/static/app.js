@@ -187,9 +187,39 @@ window.mdview = {
   }),
 };
 
+// --- Live-call queue (Phase 7 race fix; protocol: DESIGN.md §6) ---
+// This script is a `type="module"` tag: it evaluates only after parsing, and
+// only then does `window.mdview` exist. QtWebEngine, however, runs injected
+// runJavaScript as soon as the document's main-world context exists -- on a
+// (re)load that can be *before* this module evaluated, so a direct
+// `window.mdview.setPaletteCss(...)` injection threw
+// "Cannot read properties of undefined" and the user's font/palette change was
+// silently lost (macOS full-suite failure, Phase 7). The protocol instead:
+// Qt pushes ["methodName", [args...]] entries onto window.__mdviewPending --
+// the injected snippet creates the array itself, so it can never throw -- then
+// calls window.__mdviewFlush when we are up. Calls landing pre-evaluation stay
+// queued and FIFO-drain here, so order survives the race and nothing is lost.
+const flushPending = () => {
+  const queue = window.__mdviewPending;
+  while (queue?.length) {
+    const [name, args] = queue.shift();
+    try {
+      const method = window.mdview[name];
+      if (typeof method === "function") method(...args);
+    } catch (error) {
+      // One failed queued call must not strand the calls behind it.
+      console.warn(`mdview: queued ${name} failed`, error);
+    }
+  }
+};
+window.__mdviewFlush = flushPending;
+
 document.documentElement.dataset.mdviewReady = "0";
 renderMath();
 setPaletteCss(document.getElementById("mdview-palette-style")?.textContent ?? "");
+// Drained *after* the render-time defaults above: a queued live call is the
+// user's most recent state and must win over the values baked into the HTML.
+flushPending();
 document.documentElement.dataset.mdviewReady = "1";
 renderMermaid().finally(() => {
   document.documentElement.dataset.mdviewDiagrams = String(

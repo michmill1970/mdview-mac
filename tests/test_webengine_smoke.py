@@ -237,6 +237,84 @@ class TestWebEngineSmoke:
         }
         assert len(colors) > 1, f"screenshot is blank: {colors}"
 
+    def test_live_injection_racing_a_reload_is_queued_not_lost(
+        self, qtbot: Any, smoke_ctx: AppContext, dark_palette: Palette
+    ) -> None:
+        """Phase 7 race regression (macOS full-suite): live-control injections
+        must never require ``window.mdview`` to already exist -- and must never
+        die with the outgoing document either.
+
+        QtWebEngine runs injected JS as soon as the reloaded document's main-
+        world context exists -- before app.js, a ``type="module"`` script, has
+        evaluated -- while its *load state* only flips asynchronously, so an
+        injection can land on either side of the reload.  This test re-creates
+        the exact failing user sequence: a (re)navigation with font/palette
+        changes injected *immediately*, with no readiness wait in between.
+        With the old direct-call code the page threw "Cannot read properties
+        of undefined (reading 'setPaletteCss')" and the change was silently
+        lost; with the queue + replay protocol the calls must land in order
+        and the CSS must actually apply.
+        """
+        window = smoke_ctx.window
+        view = window.current_view()
+        assert view is not None
+        ready = "document.documentElement?.dataset.mdviewReady === '1'"
+        _wait_js(qtbot, view, ready, lambda v: v is True, 60_000)
+        before = _js(qtbot, view, "window.mdview.stats().background")
+
+        view.reload_page()
+        # No readiness wait -- this is the race window itself.
+        view.set_font_size(23)
+        view.reapply_theme(dark_palette, 23, appearance="dark")
+
+        # (b) the reload cleared the flag: a poll can never observe stale '1'
+        # while the new document's app.js is still loading.
+        assert _js(qtbot, view, ready) is not True
+
+        # app.js finished, and the queued calls were applied in order.
+        _wait_js(qtbot, view, ready, lambda v: v is True, 60_000)
+        _wait_js(qtbot, view, "window.mdview.stats().fontSize", lambda v: v == "23px", 10_000)
+        after = _wait_js(
+            qtbot,
+            view,
+            "window.mdview.stats().background",
+            lambda v: v is not None and v != before,
+            10_000,
+        )
+        assert after != before
+
+        fatal = [
+            entry for entry in view.load_errors if "Uncaught" in entry or "Refused to" in entry
+        ]
+        assert fatal == [], f"page reported errors: {fatal}"
+
+    def test_pending_call_queue_drains_in_order(self, qtbot: Any, smoke_ctx: AppContext) -> None:
+        """The queue protocol deterministically: FIFO, last call wins, bad
+        names skipped without throwing (so one queued failure can never
+        strand the calls behind it or produce a page error)."""
+        view = smoke_ctx.window.current_view()
+        assert view is not None
+        _wait_js(
+            qtbot,
+            view,
+            "document.documentElement?.dataset.mdviewReady === '1'",
+            lambda v: v is True,
+            60_000,
+        )
+        result = _js(
+            qtbot,
+            view,
+            "(() => {"
+            " const q = (window.__mdviewPending ??= []);"
+            " q.push(['setFontSize', [20]], ['setFontSize', [30]], ['noSuchMethod', []]);"
+            " window.__mdviewFlush();"
+            " return {fontSize: window.mdview.stats().fontSize,"
+            " drained: window.__mdviewPending.length}; })()",
+        )
+        assert result == {"fontSize": "30px", "drained": 0}
+        fatal = [entry for entry in view.load_errors if "Uncaught" in entry]
+        assert fatal == []
+
     def test_reload_picks_up_external_edit(
         self, qtbot: Any, smoke_ctx: AppContext, tmp_path: Path
     ) -> None:

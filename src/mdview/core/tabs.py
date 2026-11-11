@@ -43,7 +43,10 @@ class Tab:
     def title(self) -> str:
         if self.error is None:
             return self.document.title
-        return f"⚠ {self.document.title}"
+        # Error tabs keep the full filename *with* extension: the document was
+        # never read (no first heading, and the stem alone would render
+        # ``notes.md`` and ``notes.txt`` indistinguishable on the tab bar).
+        return f"⚠ {self.document.path.name}"
 
 
 @dataclass(slots=True)

@@ -163,15 +163,15 @@ class TestOpenFailures:
         missing = tmp_path / "kitchen-sink.md"
         problems = window.open_paths([missing])
         assert problems
-        assert "file not found" in problems[0]
+        assert "File not found" in problems[0]
         assert window.tab_count() == 1
         tab = window.current_tab()
         assert tab is not None
         assert tab.error is not None
-        assert tab.title.startswith("⚠")
+        assert tab.title == f"⚠ {missing.name}"  # keeps the extension (Phase 7)
         html = self._page_html(tab)
         assert "kitchen-sink.md" in html
-        assert "file not found" in html
+        assert "File not found" in html
         assert "Can’t open" in html  # noqa: RUF001
 
     def test_mixed_batch_opens_the_good_tabs_too(
@@ -186,7 +186,7 @@ class TestOpenFailures:
         bad = [tab for tab in tabs if tab.error is not None]
         assert (len(good), len(bad)) == (1, 1)
         assert "Demo Document" in self._page_html(good[0])
-        assert "file not found" in self._page_html(bad[0])
+        assert "File not found" in self._page_html(bad[0])
 
     def test_directory_gets_an_error_tab(self, ctx: AppContext, tmp_path: Path) -> None:
         window = ctx.window
@@ -204,11 +204,11 @@ class TestOpenFailures:
         window = ctx.window
         problems = window.open_paths([blob])
         assert problems
-        assert "not a text file" in problems[0]
+        assert "Not a text file" in problems[0]
         tab = window.current_tab()
         assert tab is not None
         assert tab.error is not None
-        assert "not a text file" in self._page_html(tab)
+        assert "Not a text file" in self._page_html(tab)
 
     def test_error_tab_upgrades_when_the_file_appears(
         self, ctx: AppContext, tmp_path: Path

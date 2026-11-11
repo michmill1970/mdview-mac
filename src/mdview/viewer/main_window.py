@@ -354,7 +354,7 @@ class MainWindow(QMainWindow):
             path = Path(raw)
             reason = inspect_openable(path)
             if reason is not None:
-                if quiet_missing and reason.startswith("file not found:"):
+                if quiet_missing and reason.lower().startswith("file not found:"):
                     continue
                 problems.append(reason)
                 tab = self._model.open_error(path, reason)

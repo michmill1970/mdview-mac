@@ -49,19 +49,23 @@ def inspect_openable(path: Path | str) -> str | None:
     inputs fail: missing files, directories, unreadable files, and files that
     do not look like text.  Both the GUI (error tabs) and the CLI (exit codes)
     classify through this one function, so their verdicts cannot drift.
+
+    Reasons are sentence-cased (Phase 7 nit): they appear standalone -- bold
+    on an error page, in the status bar, on the CLI's stderr -- not mid-
+    sentence, so ``File not found: …`` reads right everywhere.
     """
     p = Path(path).expanduser()
     if p.is_dir():
-        return f"not a file: {p} is a directory"
+        return f"Not a file: {p} is a directory"
     if not p.exists():
-        return f"file not found: {p}"
+        return f"File not found: {p}"
     try:
         with p.open("rb") as handle:
             head = handle.read(_SNIFF_BYTES)
     except OSError as exc:
-        return f"cannot read {p}: {exc.strerror or exc}"
+        return f"Cannot read {p}: {exc.strerror or exc}"
     if b"\x00" in head:
-        return f"not a text file: {p}"
+        return f"Not a text file: {p}"
     return None
 
 
@@ -100,9 +104,9 @@ class Document:
         try:
             source = p.read_text(encoding="utf-8")
         except FileNotFoundError as exc:
-            raise DocumentError(f"file not found: {p}") from exc
+            raise DocumentError(f"File not found: {p}") from exc
         except OSError as exc:
-            raise DocumentError(f"cannot read {p}: {exc.strerror or exc}") from exc
+            raise DocumentError(f"Cannot read {p}: {exc.strerror or exc}") from exc
         return cls(path=p, _title=title_from_markdown(source, fallback=p.stem))
 
     @property
@@ -127,7 +131,7 @@ class Document:
         try:
             return self.path.read_text(encoding="utf-8-sig", errors="replace")
         except OSError as exc:
-            raise DocumentError(f"cannot read {self.path}: {exc.strerror or exc}") from exc
+            raise DocumentError(f"Cannot read {self.path}: {exc.strerror or exc}") from exc
 
     @property
     def stat_token(self) -> tuple[int, int]:
