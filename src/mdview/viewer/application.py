@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,12 +41,15 @@ ORGANIZATION_DOMAIN = "mdview.invalid"
 #: Chromium flags used only in headless/Linux dev containers (never on macOS).
 _CONTAINER_CHROMIUM_FLAGS = ("--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage")
 
+#: ``callable(paths)`` -- receives open paths as one ordered batch.
+OpenHandler = Callable[[Sequence[str]], None]
+
 
 @dataclass(slots=True)
 class AppContext:
     """Everything a running app needs, in one inspectable bundle."""
 
-    app: QApplication
+    app: MDViewApplication
     profile: QWebEngineProfile
     scheme_handler: MdViewSchemeHandler
     interceptor: OfflineInterceptor
@@ -60,11 +63,22 @@ class AppContext:
 class MDViewApplication(QApplication):
     """QApplication that turns macOS ``FileOpen`` events into open requests.
 
-    This is what makes Finder double-click *and* Dock-icon drops work in the
-    bundled .app: Launch Services delivers a ``QFileOpenEvent`` to the
-    application, not argv, and without this handler the document would simply
-    be ignored.  The handler routes through the same ``open_paths`` logic as
-    in-window drag-and-drop and ``File ▸ Open…`` (DESIGN.md §7).
+    This is what makes Finder double-click, multi-select "Open With", and
+    Dock-icon drops work in the bundled .app: Launch Services delivers a
+    ``QFileOpenEvent`` *per file* to the application, not argv, and without
+    this handler the documents would simply be ignored.  Every event routes
+    through the same ``open_paths`` logic as in-window drag-and-drop and
+    ``File ▸ Open…`` (DESIGN.md §7), so a batch lands as ordered tabs with the
+    last file active -- for a running instance each per-file event opens
+    live, one open request at a time.
+
+    Cold launch (Phase 12) is the fiddly half: the first events can arrive
+    while :func:`bootstrap` is still building the window, before any handler
+    exists.  Such events are queued here **in arrival order**; installing the
+    window's route via :meth:`set_open_handler` flushes the queue as *one*
+    batch -- exactly like one multi-file drop -- and because ``run()`` shows
+    the window only after bootstrap, the first visible frame already carries
+    the launched tabs: the empty no-tab state never gets a chance to flash.
     """
 
     def __init__(self, argv: Sequence[str] = ()) -> None:
@@ -73,24 +87,55 @@ class MDViewApplication(QApplication):
         self.setApplicationDisplayName("MDView")
         self.setOrganizationName(ORGANIZATION_NAME)
         self.setOrganizationDomain(ORGANIZATION_DOMAIN)
-        self._open_paths: list[str] = []
-        self._on_open: object | None = None
+        self._open_queue: list[str] = []
+        self._open_handler: OpenHandler | None = None
+        self._launch_open_paths: list[str] = []
 
-    def set_open_handler(self, handler: object) -> None:
-        """Register ``callable(Sequence[str])``; queued early events are replayed."""
-        self._on_open = handler
-        if self._open_paths:
-            pending, self._open_paths = self._open_paths, []
-            handler(pending)  # type: ignore[operator]
+    # ------------------------------------------------------------- open --
+    def set_open_handler(self, handler: OpenHandler) -> None:
+        """Install ``handler(paths)`` and flush the cold-launch queue, in order.
+
+        The flush is a single batch call, so the window sees files delivered
+        before it existed as one ordered open request, not N racing ones.
+        """
+        self._open_handler = handler
+        if self._open_queue:
+            pending, self._open_queue = self._open_queue, []
+            self._launch_open_paths.extend(pending)
+            handler(pending)
+
+    def pending_open_paths(self) -> tuple[str, ...]:
+        """Open paths that arrived before any handler existed, in arrival order."""
+        return tuple(self._open_queue)
+
+    def launch_open_paths(self) -> tuple[str, ...]:
+        """Paths Finder delivered at cold launch (already flushed to the window).
+
+        :func:`run` skips session restore when this is non-empty: launching via
+        Launch Services is an explicit open request, not a resumption, and the
+        restored tabs would bury the launched files and steal the active tab.
+        """
+        return tuple(self._launch_open_paths)
+
+    def _reset_open_state(self) -> None:
+        """Back to cold-launch state: drop the handler and both path records.
+
+        Test seam, not app logic: the suite shares one application object
+        across the whole session, and cold-launch scenarios need a
+        window-less (handler-less) app again between tests.
+        """
+        self._open_handler = None
+        self._open_queue.clear()
+        self._launch_open_paths.clear()
 
     def event(self, event: QEvent) -> bool:
         if isinstance(event, QFileOpenEvent):
             path = event.file() or (event.url().toLocalFile() if event.url().isValid() else "")
             if path:
-                if self._on_open is None:
-                    self._open_paths.append(path)
+                if self._open_handler is None:
+                    self._open_queue.append(path)  # window not ready: keep order
                 else:
-                    self._on_open([path])  # type: ignore[operator]
+                    self._open_handler([path])
                 return True
         return super().event(event)
 
@@ -204,16 +249,39 @@ def bootstrap(
     )
 
 
+def startup_paths(
+    *,
+    explicit: Sequence[Path] = (),
+    finder_opened: Sequence[str] = (),
+    saved_session: Sequence[str] = (),
+) -> list[Path]:
+    """The paths :func:`run` opens before the window is first shown.
+
+    CLI paths win outright.  A Finder launch (``finder_opened``) *suppresses*
+    session restore (Phase 12): bootstrap has already opened those files as
+    ordered tabs, and restoring the previous session on top would bury them
+    and steal the active tab.  Everything else restores the last session.
+    """
+    if explicit:
+        return list(explicit)
+    if finder_opened:
+        return []
+    return [Path(p) for p in saved_session]
+
+
 def run(argv: Sequence[str] = (), *, paths: Sequence[Path] = ()) -> int:
     """GUI entry point for ``mdview`` / ``python -m mdview``."""
     context = bootstrap(argv)
     for warning in context.startup_warnings:
         print(f"mdview: {warning}", file=sys.stderr)
-    explicit = list(paths)
-    to_open = explicit or [Path(p) for p in context.settings.open_files]
+    to_open = startup_paths(
+        explicit=paths,
+        finder_opened=context.app.launch_open_paths(),
+        saved_session=context.settings.open_files,
+    )
     if to_open:
         # Startup session restore is not an explicit open request: a file that
         # vanished since last run is skipped quietly instead of tabifying.
-        context.window.open_paths(to_open, quiet_missing=not explicit)
+        context.window.open_paths(to_open, quiet_missing=not paths)
     context.window.show()
     return int(context.app.exec())

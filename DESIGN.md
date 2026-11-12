@@ -378,6 +378,26 @@ child enter/leave seams fire `DragLeave` constantly during a real drag.
 `QFileOpenEvent` (Finder double-click, drop on the Dock icon) keeps its own
 route into `open_paths()`, tested as parity against in-window drops.
 
+**Finder file association** (Phase 12). Double-click, multi-select
+"Open With", and Dock drops all arrive as one `QFileOpenEvent` *per file* —
+whether MDView is already running or Launch Services is starting it from that
+very click. A running instance opens each event live through `open_paths()`,
+so a batch lands as ordered tabs with the last file active, exactly like a
+multi-file drop. Cold launch is the race: the first events can hit
+`MDViewApplication.event()` while `bootstrap()` is still constructing the
+window. The app therefore **queues open paths in arrival order** until
+`set_open_handler` installs the window's route — that registration flushes
+the queue as a *single ordered batch* (one `open_paths()` call, not N racing
+ones) — and since `run()` shows the window only after bootstrap, the first
+visible frame already carries the launched tabs; the empty no-tab state never
+gets a frame. `run()` also skips session restore when the launch delivered
+files (an explicit open request is not a resumption, and restored tabs would
+bury the launched ones), and duplicate paths keep the shared route's existing
+focus-the-existing-tab behavior. The plist side: `CFBundleDocumentTypes`
+carries `LSHandlerRank: Viewer` (offered as a viewer, not an Alternate
+afterthought) beside `CFBundleTypeRole: Viewer`, the `public.markdown` UTI,
+and the `md`/`markdown` extensions.
+
 **Error tabs** (Phase 6). A failed open never fails silently: the path gets
 a normal tab titled `⚠ name` whose `Tab.error` holds the reason and whose
 body is `error_page_markdown()` rendered through the *same* pipeline as any
@@ -425,15 +445,21 @@ showing an error tab).
   hooks** plus belt-and-braces `hiddenimports` for
   `PySide6.QtWebEngineWidgets`/`QtWebEngineCore`, and an embedded
   `Info.plist`: `CFBundleDocumentTypes` for `.md`/`.markdown` only
-  (`net.daringfiretown.markdown` + `public.markdown`, roles Viewer), UTI
-  declarations for `.md`/`.markdown`, `NSHighResolutionCapable`,
-  `LSMinimumSystemVersion` 26.0, `CFBundleName/Identifier`, arm64.
-- Finder double-click → Launch Services posts a `QFileOpenEvent`, *not* argv:
-  `MDViewApplication.event()` handles it and replays events that arrive before
-  the main window exists (`set_open_handler`). This is the single most
-  load-bearing macOS detail in the project. Dropping a file on the **Dock
-  icon** posts the same event, so Dock drops, double-click and in-window
-  drags (§7) are three doors to one `open_paths()` call.
+  (`net.daringfiretown.markdown` + `public.markdown`, Viewer role *and*
+  Viewer rank since Phase 12), UTI declarations for `.md`/`.markdown`,
+  `NSHighResolutionCapable`, `LSMinimumSystemVersion` 26.0,
+  `CFBundleName/Identifier`, arm64.
+- Finder double-click → Launch Services posts a `QFileOpenEvent` *per file*,
+  *not* argv: `MDViewApplication.event()` handles it, and events that arrive
+  before the main window exists (cold launch) are **queued in arrival order**
+  and flushed as one ordered batch when `bootstrap()` installs the window's
+  route (`set_open_handler`) — before `run()` ever shows the window, so there
+  is no empty no-tab frame and the last file ends up active (Phase 12; §7).
+  Launching with files also suppresses session restore. This is the single
+  most load-bearing macOS detail in the project. Dropping a file on the
+  **Dock icon** posts the same event, so Dock drops, double-click,
+  multi-select "Open With", and in-window drags (§7) are four doors to one
+  `open_paths()` call.
 - App icon (Phase 11): `assets/mdview-icon.svg` (1024px) is the source of
   truth and `assets/icons/iconset/` holds its 10 rendered, iconutil-named PNGs
   (transparent squircle corners). Both are committed — rendering the SVG's

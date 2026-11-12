@@ -30,7 +30,7 @@ this itself, but for `uv run mdview` manually: `QT_QPA_PLATFORM=offscreen`.
 ## Quality gates
 
 ```sh
-uv run pytest                # everything (264 tests, incl. live QtWebEngine)
+uv run pytest                # everything (279 tests, incl. live QtWebEngine)
 uv run pytest -m "not gui"   # pure core + render layer, no Qt widgets
 uv run ruff check .          # lint
 uv run ruff format --check . # format

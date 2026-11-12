@@ -115,8 +115,13 @@ app = BUNDLE(
         "CFBundleDocumentTypes": [
             {
                 "CFBundleTypeName": "Markdown Document",
+                # Viewer role *and* Viewer rank (Phase 12): MDView views but
+                # never edits Markdown, and Viewer rank is what makes Launch
+                # Services offer it as a viewing handler for .md/.markdown
+                # (double-click and multi-select "Open With") instead of
+                # relegating it to an Alternate fallback.
                 "CFBundleTypeRole": "Viewer",
-                "LSHandlerRank": "Alternate",
+                "LSHandlerRank": "Viewer",
                 "LSItemContentTypes": [
                     "net.daringfiretown.markdown",
                     "public.markdown",
