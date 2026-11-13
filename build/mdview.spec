@@ -123,7 +123,11 @@ app = BUNDLE(
                 "CFBundleTypeRole": "Viewer",
                 "LSHandlerRank": "Viewer",
                 "LSItemContentTypes": [
-                    "net.daringfiretown.markdown",
+                    # The real macOS Markdown UTI (reverse DNS of daringfireball
+                    # .net); macOS reports .md files as this type, so the old
+                    # "daringfiretown" typo made Launch Services never offer
+                    # MDView for .md. Phase 13.
+                    "net.daringfireball.markdown",
                     "public.markdown",
                 ],
                 # Must match core.document.SUPPORTED_SUFFIXES exactly.  No

@@ -445,7 +445,7 @@ showing an error tab).
   hooks** plus belt-and-braces `hiddenimports` for
   `PySide6.QtWebEngineWidgets`/`QtWebEngineCore`, and an embedded
   `Info.plist`: `CFBundleDocumentTypes` for `.md`/`.markdown` only
-  (`net.daringfiretown.markdown` + `public.markdown`, Viewer role *and*
+  (`net.daringfireball.markdown` + `public.markdown`, Viewer role *and*
   Viewer rank since Phase 12), UTI declarations for `.md`/`.markdown`,
   `NSHighResolutionCapable`, `LSMinimumSystemVersion` 26.0,
   `CFBundleName/Identifier`, arm64.

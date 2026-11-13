@@ -314,7 +314,7 @@ class TestSpecDocumentTypes:
         assert doc_type["LSHandlerRank"] == "Viewer"  # not the old "Alternate" fallback
         assert doc_type["CFBundleTypeRole"] == "Viewer"
         assert "public.markdown" in doc_type["LSItemContentTypes"]
-        assert "net.daringfiretown.markdown" in doc_type["LSItemContentTypes"]
+        assert "net.daringfireball.markdown" in doc_type["LSItemContentTypes"]
         assert set(doc_type["CFBundleTypeExtensions"]) == {"md", "markdown"}
         # Phase 12 changed the rank and nothing else: the entry's key set is frozen.
         assert set(doc_type) == {
@@ -324,6 +324,21 @@ class TestSpecDocumentTypes:
             "LSItemContentTypes",
             "CFBundleTypeExtensions",
         }
+
+    def test_markdown_uti_set_is_exact_and_the_typo_never_returns(self) -> None:
+        """Phase 13: macOS assigns ``.md`` files the UTI
+        ``net.daringfireball.markdown`` (reverse DNS of daringfireball.net),
+        so that is the exact type list Launch Services must see -- and the
+        old ``net.daringfiretown.markdown`` misspelling, which made MDView
+        invisible in Open With, stays out of the document types forever."""
+        doc_types_node = self._info_plist()["CFBundleDocumentTypes"]
+        (doc_type,) = ast.literal_eval(doc_types_node)
+        assert set(doc_type["LSItemContentTypes"]) == {
+            "net.daringfireball.markdown",
+            "public.markdown",
+        }
+        # No misspelling anywhere in the CFBundleDocumentTypes declaration.
+        assert "daringfiretown" not in ast.dump(doc_types_node)
 
     def test_the_rest_of_the_plist_keys_survive_the_change(self) -> None:
         plist = self._info_plist()
