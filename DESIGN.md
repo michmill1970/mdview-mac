@@ -421,6 +421,38 @@ plus 24 px, asserted from the CSS by contract test and pixel-tested by the
 screenshot pack (`scripts/screenshot_pack.py`, incl. `missing-file.png`
 showing an error tab).
 
+**Printing** (Phase 14). `File ▸ Print…` / `Cmd+P` prints the current tab,
+panel first: the standard macOS print sheet (`QPrintDialog` over the window)
+settles paper, orientation and margins, cancel costs nothing. Paper policy
+is a decision, not a fallback: **always light on paper** — the print job
+re-renders the document through the same `render_page` path with the user's
+chosen *light* palette and `appearance=light`, whatever the screen shows, so
+a dark palette never costs toner while the light palette's own tints (code
+blocks, diagrams) stay exactly as authored. Typography mirrors the screen
+(same font size, title, document-relative images); error tabs print what
+they show. `viewer/printing.py` owns the flow, `MainWindow` only wires the
+action (⌘P disabled with no tab; a re-entrancy flag blocks a second job
+while the first pumps its preview loops).
+
+The pipeline is two-stage because **PySide6's bindings omit
+`QWebEnginePage::print(QPrinter*)`** (present in C++ and PyQt6; verified
+absent from PySide6 6.12): a hidden `ContentView` loads the print variant
+off `mdview://` and waits — via deadline'd nested event loops — until app.js
+is ready *and* every KaTeX/mermaid block is resolved (pending mermaid blocks
+are `.md-mermaid` without `data-mdview-state="error"`); then Chromium's
+`printToPdf` vectorises that page with the panel's paper size, orientation
+and margins baked in; then `QPdfDocument` rasterises each page at 300 dpi
+and `QPainter` draws it full-bleed onto the panel's `QPrinter` (its layout
+goes to zero margins first, or the dialog's margins would apply twice). The
+`@media print` block in `mdview.css` reflows for paper — full print width
+(no reading padding/max-width), block tables back to wrapping `table`
+layout, `pre-wrap` instead of clipped horizontal scroll, `break-inside:
+avoid` on code/quotes/figures/diagrams and no orphaned headings. The job's
+`PageStore` entry, hidden view and temp directory are released in `finally`,
+so cancelled and failed prints leave nothing behind (`tests/test_print.py`
+drives the whole chain with a `QPrinter` writing paper to a PDF file and
+asserts light-paper pixels with `QPdfDocument`).
+
 ## 8. Settings & on-disk layout
 
 ```
@@ -558,7 +590,11 @@ drop-accepting ancestor *before* event filters run — both reasons
 `viewer/drop_guard.py` has to mark the widgets it watches as drop targets
 (§7); `QApplication::notify` dispatches `DragMove`/`Drop`/`DragLeave` only to
 the drag manager's live target, so a test that wants a drop must send an
-accepted `DragEnter` first.
+accepted `DragEnter` first; PySide6 exposes no `QWebEnginePage::print`
+(the C++/PyQt6 method is missing from the bindings, verified on 6.12), so
+printing routes through `printToPdf` + `QPdfDocument` rasterisation (§7) —
+and `QPrintDialog` itself is the seam tests monkeypatch, so no headless run
+ever opens a dialog.
 
 ## 11. Phase boundaries & follow-ups (not Phase 1)
 

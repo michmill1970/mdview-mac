@@ -60,6 +60,7 @@ from mdview.core.settings import Settings, save_settings
 from mdview.core.tabs import Tab, TabId, TabModel
 from mdview.core.theme import PaletteSelection, default_palette_ids, selection_for
 from mdview.render.page import PageOptions, RenderedPage, render_page
+from mdview.viewer import printing
 from mdview.viewer.content_view import ContentView
 from mdview.viewer.drop_guard import markdown_paths_from_mime
 from mdview.viewer.palette_editor import PaletteEditor
@@ -109,6 +110,9 @@ class MainWindow(QMainWindow):
         self._system_appearance: Appearance = system_appearance(self)
         self._fonts = FontSize(self._settings.font_size_px)
         self._actions: dict[str, QAction] = {}
+        #: One ⌘P at a time: the job pumps nested event loops while the
+        #: preview renders, and a second job would fight the first.
+        self._print_busy = False
 
         self._model = TabModel(on_change=self._sync_tabs)
         self._tab_view = TabView(self._model, self._make_view, self)
@@ -137,6 +141,7 @@ class MainWindow(QMainWindow):
         self._make_actions()
         self._make_menus()
         self._make_toolbar()
+        self._actions["print"].setEnabled(False)  # nothing to print with no tab
         self._sync_theme_menus()
         self._apply_drop_overlay_style()
         self._update_font_widgets()
@@ -152,6 +157,7 @@ class MainWindow(QMainWindow):
     def _make_actions(self) -> None:
         handlers: dict[str, Callable[[], object]] = {
             "open": self._prompt_open,
+            "print": self._print_current,
             "closeTab": self._close_current_tab,
             "reload": self._reload_current,
             "zoomIn": lambda: self._change_font(1),
@@ -165,6 +171,7 @@ class MainWindow(QMainWindow):
         }
         specs: tuple[tuple[str, str, QKeySequence | None], ...] = (
             ("open", "&Open…", QKeySequence(QKeySequence.StandardKey.Open)),
+            ("print", "&Print…", QKeySequence(QKeySequence.StandardKey.Print)),
             ("closeTab", "&Close Tab", QKeySequence(QKeySequence.StandardKey.Close)),
             ("reload", "&Reload", QKeySequence("Ctrl+R")),
             ("zoomOut", "Zoom &Out", QKeySequence(QKeySequence.StandardKey.ZoomOut)),
@@ -194,6 +201,8 @@ class MainWindow(QMainWindow):
 
         file_menu = bar.addMenu("&File")
         file_menu.addAction(self._actions["open"])
+        file_menu.addSeparator()
+        file_menu.addAction(self._actions["print"])
         file_menu.addSeparator()
         file_menu.addAction(self._actions["closeTab"])
 
@@ -545,6 +554,45 @@ class MainWindow(QMainWindow):
             self._model.close(active.tab_id)
             self._persist_settings()
 
+    def _print_current(self) -> None:
+        """File ▸ Print… / ⌘P: print the current tab, always light on paper.
+
+        Everything after the menu entry lives in :mod:`mdview.viewer.printing`
+        (panel -> hidden print-variant page -> PDF -> printer).  Error tabs
+        print their error page too -- WYSIWYG includes what the tab actually
+        shows.  Failures never raise into the event loop: the status bar says
+        what went wrong.
+        """
+        tab = self._model.active
+        if tab is None or self._print_busy:
+            return
+        self._print_busy = True
+        self._actions["print"].setEnabled(False)
+        try:
+            if tab.error is not None:
+                source = error_page_markdown(tab.document.path, tab.error)
+            else:
+                source = tab.document.read()
+            pages = printing.PrintJob(
+                parent=self,
+                profile=self._profile,
+                registry=self._registry,
+                settings=self._settings,
+                font_size_px=self._fonts.size_px,
+                scheme_handler=self._scheme_handler,
+                markdown_source=source,
+                title=tab.title,
+                document_dir=tab.document.path.parent,
+            ).run()
+            if pages:
+                noun = "page" if pages == 1 else "pages"
+                self.statusBar().showMessage(f"Printed {pages} {noun}", 4000)
+        except (printing.PrintError, DocumentError, AssetError, OSError) as exc:
+            self.statusBar().showMessage(f"Print failed: {exc}", 8000)
+        finally:
+            self._print_busy = False
+            self._actions["print"].setEnabled(self._model.count > 0)
+
     def _reload_current(self) -> None:
         tab = self._model.active
         if tab is not None:
@@ -563,7 +611,8 @@ class MainWindow(QMainWindow):
             "<p><b>MDView</b> renders Markdown offline: tabs, palettes, KaTeX, Mermaid.</p>"
             "<ul>"
             "<li><kbd>⌘O</kbd> Open &nbsp; <kbd>⌘W</kbd> Close tab &nbsp; "
-            "<kbd>⌘R</kbd> Reload</li>"
+            "<kbd>⌘R</kbd> Reload &nbsp; <kbd>⌘P</kbd> Print (paper always follows "
+            "your light palette)</li>"
             "<li><kbd>⌘=</kbd> / <kbd>⌘-</kbd> Text size &nbsp; <kbd>⌘0</kbd> Reset"
             " &nbsp; (zoom bar: bottom of the window)</li>"
             "<li><kbd>⌘1…⌘9</kbd> Jump to tab &nbsp; <kbd>⌃⇧Tab</kbd> / <kbd>⌃Tab</kbd> Cycle</li>"
@@ -707,6 +756,7 @@ class MainWindow(QMainWindow):
     def _sync_tabs(self) -> None:
         self._tab_view.sync()
         self._stack.setCurrentIndex(1 if self._model.count else 0)
+        self._actions["print"].setEnabled(self._model.count > 0 and not self._print_busy)
         for tab_id in [t for t in self._tab_view.view_ids() if self._model.tab(t) is None]:
             PageStore.drop(page_id_for(tab_id))
         active = self._model.active

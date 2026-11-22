@@ -86,6 +86,9 @@ just silently shows the generic one.
   `mdview open a.md gone.md` exits non-zero while still opening the good file
   (`render`: missing → 1, unusable → 2)
 - `Cmd+=` / `Cmd+-` / `Cmd+0` **and** a toolbar font control (10–32 px)
+- `Cmd+P` prints the current tab through the native macOS panel; WYSIWYG but
+  always light on paper (your light palette's colours, never dark backgrounds),
+  with KaTeX, diagrams and code tints rendering exactly as on screen
 - GFM tables, task lists, strikethrough; Pygments code highlighting coloured
   by the active palette; KaTeX math; Mermaid diagrams — all assets on disk
 - Palettes: GitHub Light/Dark, Dracula, High-Contrast Light built in; edit or

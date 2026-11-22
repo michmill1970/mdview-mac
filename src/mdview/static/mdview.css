@@ -272,3 +272,43 @@ body.md-body {
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
 }
+
+/* ---------------------------------------------------------------- print --
+   Paper rules (Phase 14). The print pipeline (viewer/printing.py) always
+   renders with the user's LIGHT palette, so colours need no override here;
+   these rules only re-flow the layout onto pages: content spans the full
+   print width (page margins come from the print dialog, not the on-screen
+   reading padding), horizontally-scrolling blocks wrap instead of clipping,
+   and units of meaning stay whole across page breaks. */
+@media print {
+  .md-content {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  /* Tables scroll horizontally on screen (display: block); pages must not
+     clip columns -- table layout wraps, and rows break only between rows. */
+  .md-content table { display: table; }
+  .md-content tr { break-inside: avoid; }
+
+  .md-content pre,
+  .md-code,
+  .md-code pre,
+  .md-content code { white-space: pre-wrap; word-break: break-word; }
+
+  .md-content .md-code,
+  .md-content blockquote,
+  .md-content figure,
+  .md-content img,
+  .md-content .md-mermaid-svg,
+  .md-content .md-math-block,
+  .md-content .katex-display { break-inside: avoid; }
+
+  /* A heading must not orphan at a page bottom (Chromium honours this). */
+  .md-content h1, .md-content h2, .md-content h3, .md-content h4 { break-after: avoid-page; }
+
+  /* The task-box check is drawn with white borders: keep it exact so the
+     light-palette accent fill (and code tints / diagram fills) print true. */
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
